@@ -7,6 +7,7 @@ use nom::{
     character::complete::digit1,
     combinator::eof,
     sequence::preceded,
+    Err,
 };
 
 pub trait AstNode: Debug {
@@ -63,16 +64,18 @@ fn parse_literal_number(i: &str) -> IResult<&str, Box<dyn AstNode + '_>> {
 }
 
 fn parse_unary_expr(i: &str) -> IResult<&str, Box<dyn AstNode + '_>> {
-    let (i, op) = tag("-")(i)?;
-    let (i, expr) = preceded(parse_space, parse_literal_number)(i)?;
-    Ok((i, Box::new(UnaryExpr { op, expr })))
+    match preceded(parse_space, tag("-"))(i) {
+        Ok((i, op)) => {
+            let (i, expr) = preceded(parse_space, parse_literal_number)(i)?;
+            Ok((i, Box::new(UnaryExpr { op, expr })))
+        }
+        Err(Err::Error(_)) => preceded(parse_space, parse_literal_number)(i),
+        Err(e) => Err(e),
+    }
 }
 
 fn parse_root(i: &str) -> IResult<&str, Box<dyn AstNode + '_>> {
-    let (i, ast_node) = preceded(
-        parse_space,
-        parse_unary_expr,
-    )(i)?;
+    let (i, ast_node) = parse_unary_expr(i)?;
     let (i, _) = preceded(
         parse_space,
         eof,

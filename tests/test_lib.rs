@@ -17,6 +17,7 @@ use nom::{
 fn test_parse() -> Result<(), String> {
     assert_eq!(err(parse("-30A"))?, Err::Error(Error { input: "A", code: ErrorKind::Eof }));
     assert_eq!(ok(parse("-30"))?.evaluate(), Value::Number(-30.0));
+    assert_eq!(ok(parse("30"))?.evaluate(), Value::Number(30.0));
 
     Ok(())
 }
