@@ -24,6 +24,19 @@ struct UnaryExpr {
     expr: Box<dyn Expr>,
 }
 
+impl UnaryExpr {
+    fn parse(i: &str) -> IResult<&str, Box<dyn Expr>> {
+        match UnaryOperator::parse(i) {
+            Ok((i, op)) => {
+                let (i, expr) = LiteralNumber::parse(i)?;
+                Ok((i, Box::new(UnaryExpr { op, expr })))
+            }
+            Err(Err::Error(_)) => LiteralNumber::parse(i),
+            Err(e) => Err(e),
+        }
+    }
+}
+
 impl Expr for UnaryExpr {
     fn evaluate(&self) -> Value {
         self.op.evaluate(&self.expr.evaluate())
@@ -64,6 +77,14 @@ struct LiteralNumber {
     number: f64,
 }
 
+impl LiteralNumber {
+    fn parse(i: &str) -> IResult<&str, Box<dyn Expr>> {
+        let (i, number_str) = preceded(parse_space, digit1)(i)?;
+        let number = number_str.parse().unwrap();
+        Ok((i, Box::new(LiteralNumber { number })))
+    }
+}
+
 impl Expr for LiteralNumber {
     fn evaluate(&self) -> Value {
         Value::Number(self.number)
@@ -75,6 +96,53 @@ struct BinaryExpr {
     op: BinaryOperator,
     left_expr: Box<dyn Expr>,
     right_expr: Box<dyn Expr>,
+}
+
+impl BinaryExpr {
+    fn parse(i: &str) -> IResult<&str, Box<dyn Expr>> {
+        let mut stack: Vec<(BinaryOperator, Box<dyn Expr>)> = Vec::new();
+        let mut current_i = i;
+        let (i, expr) = loop {
+            let i = current_i;
+            let (i, new_expr) = UnaryExpr::parse(i)?;
+            let (i, new_op) = match BinaryOperator::parse(i) {
+                Ok(r) => r,
+                Err(Err::Error(_)) => break (i, new_expr),
+                Err(e) => return Err(e),
+            };
+
+            let mut expr = new_expr;
+            loop {
+                match stack.pop() {
+                    Some((stacked_op, stacked_expr)) => {
+                        if new_op.precedence() <= stacked_op.precedence() {
+                            expr = Box::new(BinaryExpr { op: stacked_op, left_expr: stacked_expr, right_expr: expr })
+                        }
+                        else {
+                            stack.push((stacked_op, stacked_expr));
+                            break;
+                        }
+                    },
+                    None => break,
+                };
+            };
+
+            stack.push((new_op, expr));
+            current_i = i;
+        };
+
+        let mut expr = expr;
+        loop {
+            match stack.pop() {
+                Some((stacked_op, stacked_expr)) => {
+                    expr = Box::new(BinaryExpr { op: stacked_op, left_expr: stacked_expr, right_expr: expr });
+                },
+                None => break,
+            };
+        };
+
+        Ok((i, expr))
+    }
 }
 
 impl Expr for BinaryExpr {
@@ -194,70 +262,8 @@ fn parse_space(i: &str) -> IResult<&str, &str> {
     take_while(move |c| chars.contains(c))(i)
 }
 
-fn parse_literal_number(i: &str) -> IResult<&str, Box<dyn Expr>> {
-    let (i, number_str) = digit1(i)?;
-    let number = number_str.parse().unwrap();
-    Ok((i, Box::new(LiteralNumber { number })))
-}
-
-fn parse_binary_expr(i: &str) -> IResult<&str, Box<dyn Expr>> {
-    let mut stack: Vec<(BinaryOperator, Box<dyn Expr>)> = Vec::new();
-    let mut current_i = i;
-    let (i, expr) = loop {
-        let i = current_i;
-        let (i, new_expr) = parse_unary_expr(i)?;
-        let (i, new_op) = match BinaryOperator::parse(i) {
-            Ok(r) => r,
-            Err(Err::Error(_)) => break (i, new_expr),
-            Err(e) => return Err(e),
-        };
-
-        let mut expr = new_expr;
-        loop {
-            match stack.pop() {
-                Some((stacked_op, stacked_expr)) => {
-                    if new_op.precedence() <= stacked_op.precedence() {
-                        expr = Box::new(BinaryExpr { op: stacked_op, left_expr: stacked_expr, right_expr: expr })
-                    }
-                    else {
-                        stack.push((stacked_op, stacked_expr));
-                        break;
-                    }
-                },
-                None => break,
-            };
-        };
-
-        stack.push((new_op, expr));
-        current_i = i;
-    };
-
-    let mut expr = expr;
-    loop {
-        match stack.pop() {
-            Some((stacked_op, stacked_expr)) => {
-                expr = Box::new(BinaryExpr { op: stacked_op, left_expr: stacked_expr, right_expr: expr });
-            },
-            None => break,
-        };
-    };
-
-    Ok((i, expr))
-}
-
-fn parse_unary_expr(i: &str) -> IResult<&str, Box<dyn Expr>> {
-    match UnaryOperator::parse(i) {
-        Ok((i, op)) => {
-            let (i, expr) = preceded(parse_space, parse_literal_number)(i)?;
-            Ok((i, Box::new(UnaryExpr { op, expr })))
-        }
-        Err(Err::Error(_)) => preceded(parse_space, parse_literal_number)(i),
-        Err(e) => Err(e),
-    }
-}
-
 fn parse_root(i: &str) -> IResult<&str, Box<dyn Expr>> {
-    let (i, expr) = parse_binary_expr(i)?;
+    let (i, expr) = BinaryExpr::parse(i)?;
     let (i, _) = parse_eof(i)?;
     Ok((i, expr))
 }
