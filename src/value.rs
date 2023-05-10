@@ -22,6 +22,7 @@ use std::{
 pub enum Value {
     Number(Number),
     Boolean(bool),
+    String(String),
 }
 
 impl Value {
@@ -46,7 +47,8 @@ impl Into<bool> for &Value {
                     Number::Integer(i) => *i != 0,
                 }
             },
-            Value::Boolean(primitive_boolean) => *primitive_boolean,
+            Value::Boolean(boolean) => *boolean,
+            Value::String(string) => 0 < string.len(),
         }
     }
 }
@@ -61,7 +63,13 @@ impl Into<Number> for &Value {
     fn into(self) -> Number {
         match self {
             Value::Number(number) => *number,
-            Value::Boolean(primitive_boolean) => if *primitive_boolean { Number::Integer(1) } else { Number::Integer(0) },
+            Value::Boolean(boolean) => if *boolean { Number::from(1) } else { Number::from(0) },
+            Value::String(string) => {
+                match string.parse::<f64>() {
+                    Ok(number) => Number::from(number),
+                    Err(_) => Number::from(f64::NAN),
+                }
+            },
         }
     }
 }
@@ -83,6 +91,28 @@ impl PartialOrd for Value {
         let rv: Number = self.into();
         let lv: Number = number.into();
         return rv.partial_cmp(&lv)
+    }
+}
+
+impl From<String> for Value {
+    fn from(v: String) -> Self {
+        Self::String(v)
+    }
+}
+
+impl From<&str> for Value {
+    fn from(v: &str) -> Self {
+        Self::from(v.to_string())
+    }
+}
+
+impl Into<String> for &Value {
+    fn into(self) -> String {
+        match self {
+            Value::Number(number) => number.to_string(),
+            Value::Boolean(boolean) => boolean.to_string(),
+            Value::String(string) => string.clone(),
+        }
     }
 }
 

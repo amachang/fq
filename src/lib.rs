@@ -11,6 +11,7 @@ pub use value::Value;
 pub use expr::{
     Expr,
     LiteralNumber,
+    LiteralString,
     UnaryExpr,
     UnaryOperator,
     BinaryExpr,

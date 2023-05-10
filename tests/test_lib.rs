@@ -47,6 +47,9 @@ fn test_parse() -> Result<(), String> {
         ("4 div 3 > 2 % 1", Value::from(true)),
         ("---1.0", Value::from(-1)),
         (" inf ", Value::from(f64::INFINITY)),
+        ("'inf' + 1", Value::from(f64::INFINITY)),
+        ("'1' + '2'", Value::from(3)),
+        (" \"hello world!\" ", Value::from("hello world!")),
     ];
 
     for (source, result_value) in result_map {
@@ -55,6 +58,7 @@ fn test_parse() -> Result<(), String> {
 
     assert_eq!(err(parse("-30A"))?, Err::Error(Error::new("A", ErrorKind::Eof)));
     assert!(ok(parse("nan"))?.evaluate().is_nan());
+    assert!(ok(parse("-'test'"))?.evaluate().is_nan());
     Ok(())
 }
 

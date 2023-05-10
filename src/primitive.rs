@@ -35,8 +35,12 @@ impl From<i64> for Number {
 }
 
 impl From<f64> for Number {
-    fn from(v: f64) -> Self {
-        Self::Float(v)
+    fn from(f: f64) -> Self {
+        if f == f.floor() as i64 as f64 {
+            Number::Integer(f as i64)
+        } else {
+            Number::Float(f as f64)
+        }
     }
 }
 
@@ -54,6 +58,15 @@ impl PartialOrd for Number {
 impl PartialEq for Number {
     fn eq(&self, number: &Self) -> bool {
         self.partial_cmp(number) == Some(Ordering::Equal)
+    }
+}
+
+impl ToString for Number {
+    fn to_string(&self) -> String {
+        match self {
+            Self::Integer(i) => i.to_string(),
+            Self::Float(f) => f.to_string(),
+        }
     }
 }
 

@@ -12,9 +12,13 @@ use std::{
 
 use nom::{
     IResult,
-    bytes::complete::tag,
+    bytes::complete::{
+        tag,
+        take_until,
+    },
     number::complete::float,
     sequence::preceded,
+    branch::alt,
     Err,
     error::{
         ParseError,
@@ -39,7 +43,10 @@ impl UnaryExpr {
                 let (i, expr) = UnaryExpr::parse(i)?;
                 Ok((i, Box::new(UnaryExpr { op, expr })))
             }
-            Err(Err::Error(_)) => LiteralNumber::parse(i),
+            Err(Err::Error(_)) => alt((
+                LiteralString::parse,
+                LiteralNumber::parse,
+            ))(i),
             Err(e) => Err(e),
         }
     }
@@ -88,8 +95,7 @@ pub struct LiteralNumber {
 impl LiteralNumber {
     pub fn parse(i: &str) -> IResult<&str, Box<dyn Expr>> {
         let (i, f) = preceded(parse_space, float)(i)?;
-        let f = f as f64;
-        let number = if f == f.floor() as i64 as f64 { Number::Integer(f as i64) } else { Number::Float(f as f64) };
+        let number = Number::from(f as f64);
         Ok((i, Box::new(LiteralNumber { number })))
     }
 }
@@ -97,6 +103,29 @@ impl LiteralNumber {
 impl Expr for LiteralNumber {
     fn evaluate(&self) -> Value {
         Value::Number(self.number)
+    }
+}
+
+#[derive(Debug)]
+pub struct LiteralString {
+    string: String,
+}
+
+impl LiteralString {
+    pub fn parse(i: &str) -> IResult<&str, Box<dyn Expr>> {
+        let (i, quote_char) = preceded(
+            parse_space,
+            alt((tag("\""), tag("'")))
+        )(i)?;
+        let (i, string) = take_until(quote_char)(i)?;
+        let (i, _) = preceded(parse_space, tag(quote_char))(i)?;
+        Ok((i, Box::new(LiteralString { string: string.to_string() })))
+    }
+}
+
+impl Expr for LiteralString {
+    fn evaluate(&self) -> Value {
+        Value::String(self.string.clone())
     }
 }
 
