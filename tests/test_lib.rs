@@ -30,11 +30,11 @@ fn test_number() {
 #[test]
 fn test_binary_operator() {
     assert_eq!(BinaryOperator::Division.evaluate(&Value::from(1), &Value::from(0)), Value::from(f64::INFINITY),);
-    assert!(BinaryOperator::Division.evaluate(&Value::from(0), &Value::from(0)).as_number().is_nan());
-    assert!(BinaryOperator::Equal.evaluate(&Value::from(1), &Value::from(1.0)).as_boolean());
+    assert!(BinaryOperator::Division.evaluate(&Value::from(0), &Value::from(0)).is_nan());
+    assert_eq!(BinaryOperator::Equal.evaluate(&Value::from(1), &Value::from(1.0)), Value::from(true));
 
     let n = Value::from(1);
-    assert!(BinaryOperator::Equal.evaluate(&n, &n).as_boolean());
+    assert_eq!(BinaryOperator::Equal.evaluate(&n, &n), Value::from(true));
 }
 
 #[test]

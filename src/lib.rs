@@ -1,9 +1,12 @@
 #![deny(warnings, clippy::all, clippy::pedantic)]
 
 mod primitive;
+mod value;
+
+pub use primitive::Number;
+pub use value::Value;
 
 use std::{
-    convert::From,
     fmt::Debug,
 };
 
@@ -20,7 +23,6 @@ use nom::{
     },
 };
 
-pub use primitive::Number;
 
 pub trait Expr: Debug {
     fn evaluate(&self) -> Value;
@@ -75,7 +77,7 @@ impl UnaryOperator {
 
     pub fn evaluate(&self, v: &Value) -> Value {
         match self {
-            Self::Minus => Value::Number(-v.as_number()),
+            Self::Minus => -v,
         }
     }
 }
@@ -222,71 +224,19 @@ impl BinaryOperator {
 
     pub fn evaluate(&self, lv: &Value, rv: &Value) -> Value {
         match self {
-            Self::Division => Value::Number(lv.as_number() / rv.as_number()),
-            Self::Modulus => Value::Number(lv.as_number() % rv.as_number()),
-            Self::Multiplication => Value::Number(lv.as_number() * rv.as_number()),
-            Self::Addition => Value::Number(lv.as_number() + rv.as_number()),
-            Self::Subtraction => Value::Number(lv.as_number() - rv.as_number()),
-            Self::LessThan => Value::Boolean(lv.as_number() < rv.as_number()),
-            Self::LessThanEqual => Value::Boolean(lv.as_number() <= rv.as_number()),
-            Self::GreaterThan => Value::Boolean(lv.as_number() > rv.as_number()),
-            Self::GreaterThanEqual => Value::Boolean(lv.as_number() >= rv.as_number()),
+            Self::Division => lv / rv,
+            Self::Modulus => lv % rv,
+            Self::Multiplication => lv * rv,
+            Self::Addition => lv + rv,
+            Self::Subtraction => lv - rv,
+            Self::LessThan => Value::Boolean(lv < rv),
+            Self::LessThanEqual => Value::Boolean(lv <= rv),
+            Self::GreaterThan => Value::Boolean(lv > rv),
+            Self::GreaterThanEqual => Value::Boolean(lv >= rv),
             Self::Equal => Value::Boolean(lv == rv),
             Self::NotEqual => Value::Boolean(lv != rv),
-            Self::And => Value::Boolean(lv.as_boolean() && rv.as_boolean()),
-            Self::Or => Value::Boolean(lv.as_boolean() || rv.as_boolean()),
-        }
-    }
-}
-
-
-#[derive(Debug, PartialEq)]
-pub enum Value {
-    Number(Number),
-    Boolean(bool),
-}
-
-impl From<bool> for Value {
-    fn from(v: bool) -> Self {
-        Self::Boolean(v)
-    }
-}
-
-impl From<Number> for Value {
-    fn from(v: Number) -> Self {
-        Self::Number(v)
-    }
-}
-
-impl From<f64> for Value {
-    fn from(v: f64) -> Self {
-        Self::Number(Number::from(v))
-    }
-}
-
-impl From<i64> for Value {
-    fn from(v: i64) -> Self {
-        Self::Number(Number::from(v))
-    }
-}
-
-impl Value {
-    pub fn as_number(&self) -> Number {
-        match self {
-            Value::Number(number) => *number,
-            Value::Boolean(primitive_boolean) => if *primitive_boolean { Number::Integer(1) } else { Number::Integer(0) },
-        }
-    }
-
-    pub fn as_boolean(&self) -> bool {
-        match self {
-            Value::Number(number) => {
-                match number {
-                    Number::Float(f) => !f.is_nan() && *f != 0.0f64,
-                    Number::Integer(i) => *i != 0i64,
-                }
-            },
-            Value::Boolean(primitive_boolean) => *primitive_boolean,
+            Self::And => Value::Boolean(lv.into() && rv.into()),
+            Self::Or => Value::Boolean(lv.into() || rv.into()),
         }
     }
 }
