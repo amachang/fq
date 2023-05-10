@@ -13,7 +13,7 @@ use std::{
 use nom::{
     IResult,
     bytes::complete::tag,
-    character::complete::digit1,
+    number::complete::float,
     sequence::preceded,
     Err,
     error::{
@@ -36,7 +36,7 @@ impl UnaryExpr {
     pub fn parse(i: &str) -> IResult<&str, Box<dyn Expr>> {
         match UnaryOperator::parse(i) {
             Ok((i, op)) => {
-                let (i, expr) = LiteralNumber::parse(i)?;
+                let (i, expr) = UnaryExpr::parse(i)?;
                 Ok((i, Box::new(UnaryExpr { op, expr })))
             }
             Err(Err::Error(_)) => LiteralNumber::parse(i),
@@ -87,9 +87,10 @@ pub struct LiteralNumber {
 
 impl LiteralNumber {
     pub fn parse(i: &str) -> IResult<&str, Box<dyn Expr>> {
-        let (i, number_str) = preceded(parse_space, digit1)(i)?;
-        let number = number_str.parse().unwrap();
-        Ok((i, Box::new(LiteralNumber { number: Number::Integer(number) })))
+        let (i, f) = preceded(parse_space, float)(i)?;
+        let f = f as f64;
+        let number = if f == f.floor() as i64 as f64 { Number::Integer(f as i64) } else { Number::Float(f as f64) };
+        Ok((i, Box::new(LiteralNumber { number })))
     }
 }
 

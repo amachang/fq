@@ -39,11 +39,22 @@ fn test_binary_operator() {
 
 #[test]
 fn test_parse() -> Result<(), String> {
+    let result_map = [
+        ("-30", Value::from(-30)),
+        ("30", Value::from(30)),
+        ("1e10", Value::from(10000000000)),
+        ("1 + 2 * - 3", Value::from(-5)),
+        ("4 div 3 > 2 % 1", Value::from(true)),
+        ("---1.0", Value::from(-1)),
+        (" inf ", Value::from(f64::INFINITY)),
+    ];
+
+    for (source, result_value) in result_map {
+        assert_eq!(ok(parse(source))?.evaluate(), result_value);
+    }
+
     assert_eq!(err(parse("-30A"))?, Err::Error(Error::new("A", ErrorKind::Eof)));
-    assert_eq!(ok(parse("-30"))?.evaluate(), Value::from(-30));
-    assert_eq!(ok(parse("30"))?.evaluate(), Value::from(30));
-    assert_eq!(ok(parse("1 + 2 * 3"))?.evaluate(), Value::from(7));
-    assert_eq!(ok(parse("4 div 3 > 2 % 1"))?.evaluate(), Value::from(true));
+    assert!(ok(parse("nan"))?.evaluate().is_nan());
     Ok(())
 }
 
