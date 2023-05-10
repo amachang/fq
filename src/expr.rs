@@ -27,13 +27,13 @@ pub trait Expr: Debug {
 }
 
 #[derive(Debug)]
-struct UnaryExpr {
+pub struct UnaryExpr {
     op: UnaryOperator,
     expr: Box<dyn Expr>,
 }
 
 impl UnaryExpr {
-    fn parse(i: &str) -> IResult<&str, Box<dyn Expr>> {
+    pub fn parse(i: &str) -> IResult<&str, Box<dyn Expr>> {
         match UnaryOperator::parse(i) {
             Ok((i, op)) => {
                 let (i, expr) = LiteralNumber::parse(i)?;
@@ -81,12 +81,12 @@ impl UnaryOperator {
 }
 
 #[derive(Debug)]
-struct LiteralNumber {
+pub struct LiteralNumber {
     number: Number,
 }
 
 impl LiteralNumber {
-    fn parse(i: &str) -> IResult<&str, Box<dyn Expr>> {
+    pub fn parse(i: &str) -> IResult<&str, Box<dyn Expr>> {
         let (i, number_str) = preceded(parse_space, digit1)(i)?;
         let number = number_str.parse().unwrap();
         Ok((i, Box::new(LiteralNumber { number: Number::Integer(number) })))

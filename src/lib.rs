@@ -5,11 +5,14 @@ mod primitive;
 mod value;
 mod expr;
 
-pub use parse_util::parse_eof;
+use parse_util::parse_eof;
 pub use primitive::Number;
 pub use value::Value;
 pub use expr::{
     Expr,
+    LiteralNumber,
+    UnaryExpr,
+    UnaryOperator,
     BinaryExpr,
     BinaryOperator,
 };
