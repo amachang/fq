@@ -1,18 +1,12 @@
 #![deny(warnings, clippy::all, clippy::pedantic)]
 
+mod primitive;
+
 use std::{
     convert::From,
     fmt::Debug,
-    cmp::Ordering,
-    ops::{
-        Neg,
-        Add,
-        Sub,
-        Div,
-        Rem,
-        Mul,
-    },
 };
+
 use nom::{
     IResult,
     bytes::complete::{tag, take_while},
@@ -25,6 +19,8 @@ use nom::{
         ErrorKind,
     },
 };
+
+pub use primitive::Number;
 
 pub trait Expr: Debug {
     fn evaluate(&self) -> Value;
@@ -243,155 +239,6 @@ impl BinaryOperator {
     }
 }
 
-#[derive(Debug, Copy, Clone)]
-pub enum Number {
-    Integer(i64),
-    Float(f64),
-}
-
-impl Number {
-    pub fn is_nan(self) -> bool {
-        match self {
-            Self::Integer(_) => false,
-            Self::Float(v) => v.is_nan(),
-        }
-    }
-}
-
-impl From<i64> for Number {
-    fn from(v: i64) -> Self {
-        Self::Integer(v)
-    }
-}
-
-impl From<f64> for Number {
-    fn from(v: f64) -> Self {
-        Self::Float(v)
-    }
-}
-
-impl PartialOrd for Number {
-    fn partial_cmp(&self, number: &Self) -> Option<Ordering> {
-        match (self, number) {
-            (Self::Integer(lv), Self::Integer(rv)) => Some(lv.cmp(rv)),
-            (Self::Integer(lv), Self::Float(rv)) => (*lv as f64).partial_cmp(rv),
-            (Self::Float(lv), Self::Integer(rv)) => lv.partial_cmp(&(*rv as f64)),
-            (Self::Float(lv), Self::Float(rv)) => lv.partial_cmp(rv),
-        }
-    }
-}
-
-impl PartialEq for Number {
-    fn eq(&self, number: &Self) -> bool {
-        self.partial_cmp(number) == Some(Ordering::Equal)
-    }
-}
-
-impl Neg for Number {
-    type Output = Self;
-
-    fn neg(self) -> Self::Output {
-        match self {
-            Self::Integer(v) => {
-                match v.checked_neg() {
-                    Some(r) => Self::Integer(r),
-                    None => Self::Float(-(v as f64)),
-                }
-            }
-            Self::Float(v) => Self::Float(-v),
-        }
-    }
-}
-
-impl Add for Number {
-    type Output = Self;
-
-    fn add(self, number: Self) -> Self::Output {
-        match (self, number) {
-            (Self::Integer(lv), Self::Integer(rv)) => {
-                match lv.checked_add(rv) {
-                    Some(r) => Self::Integer(r),
-                    None => Self::Float(lv as f64 + rv as f64),
-                }
-            },
-            (Self::Integer(lv), Self::Float(rv)) => Self::Float(lv as f64 + rv),
-            (Self::Float(lv), Self::Integer(rv)) => Self::Float(lv + rv as f64),
-            (Self::Float(lv), Self::Float(rv)) => Self::Float(lv + rv),
-        }
-    }
-}
-
-impl Sub for Number {
-    type Output = Self;
-
-    fn sub(self, number: Self) -> Self::Output {
-        match (self, number) {
-            (Self::Integer(lv), Self::Integer(rv)) => {
-                match lv.checked_sub(rv) {
-                    Some(r) => Self::Integer(r),
-                    None => Self::Float(lv as f64 - rv as f64),
-                }
-            },
-            (Self::Integer(lv), Self::Float(rv)) => Self::Float(lv as f64 - rv),
-            (Self::Float(lv), Self::Integer(rv)) => Self::Float(lv - rv as f64),
-            (Self::Float(lv), Self::Float(rv)) => Self::Float(lv - rv),
-        }
-    }
-}
-
-impl Div for Number {
-    type Output = Self;
-
-    fn div(self, number: Self) -> Self::Output {
-        match (self, number) {
-            (Self::Integer(lv), Self::Integer(rv)) => {
-                match lv.checked_div(rv) {
-                    Some(r) => Self::Integer(r),
-                    None => Self::Float(lv as f64 / rv as f64),
-                }
-            },
-            (Self::Integer(lv), Self::Float(rv)) => Self::Float(lv as f64 / rv),
-            (Self::Float(lv), Self::Integer(rv)) => Self::Float(lv / rv as f64),
-            (Self::Float(lv), Self::Float(rv)) => Self::Float(lv / rv),
-        }
-    }
-}
-
-impl Rem for Number {
-    type Output = Self;
-
-    fn rem(self, number: Self) -> Self::Output {
-        match (self, number) {
-            (Self::Integer(lv), Self::Integer(rv)) => {
-                match lv.checked_rem(rv) {
-                    Some(r) => Self::Integer(r),
-                    None => Self::Float(lv as f64 % rv as f64),
-                }
-            },
-            (Self::Integer(lv), Self::Float(rv)) => Self::Float(lv as f64 % rv),
-            (Self::Float(lv), Self::Integer(rv)) => Self::Float(lv % rv as f64),
-            (Self::Float(lv), Self::Float(rv)) => Self::Float(lv % rv),
-        }
-    }
-}
-
-impl Mul for Number {
-    type Output = Self;
-
-    fn mul(self, number: Self) -> Self::Output {
-        match (self, number) {
-            (Self::Integer(lv), Self::Integer(rv)) => {
-                match lv.checked_mul(rv) {
-                    Some(r) => Self::Integer(r),
-                    None => Self::Float(lv as f64 * rv as f64),
-                }
-            },
-            (Self::Integer(lv), Self::Float(rv)) => Self::Float(lv as f64 * rv),
-            (Self::Float(lv), Self::Integer(rv)) => Self::Float(lv * rv as f64),
-            (Self::Float(lv), Self::Float(rv)) => Self::Float(lv * rv),
-        }
-    }
-}
 
 #[derive(Debug, PartialEq)]
 pub enum Value {
