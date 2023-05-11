@@ -153,7 +153,12 @@ impl Into<String> for &Value {
             Value::Number(number) => number.to_string(),
             Value::Boolean(boolean) => boolean.to_string(),
             Value::String(string) => string.clone(),
-            Value::Set(_) => todo!(),
+            Value::Set(values) => {
+                match values.iter().cloned().next() {
+                    Some(real_value) => real_value.to_string(),
+                    None => String::from(""),
+                }
+            },
         }
     }
 }
@@ -322,5 +327,12 @@ impl Into<String> for &RealValue {
             RealValue::Boolean(boolean) => boolean.to_string(),
             RealValue::String(string) => string.clone(),
         }
+    }
+}
+
+impl ToString for RealValue {
+    fn to_string(&self) -> String {
+        let str: String = self.into();
+        str
     }
 }
