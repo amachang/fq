@@ -2,12 +2,18 @@
 
 use super::{
     parse_util::parse_space,
-    value::Value,
-    primitive::Number,
+    value::{
+        Value,
+        RealValue,
+    },
+    primitive::{
+        Number,
+    },
 };
 
 use std::{
     fmt::Debug,
+    collections::BTreeSet,
 };
 
 use nom::{
@@ -28,6 +34,62 @@ use nom::{
 
 pub trait Expr: Debug {
     fn evaluate(&self) -> Value;
+}
+
+#[derive(Debug)]
+pub struct UnionExpr {
+    exprs: Vec<Box<dyn Expr>>,
+}
+
+impl UnionExpr {
+    pub fn parse(i: &str) -> IResult<&str, Box<dyn Expr>> {
+        let mut exprs: Vec<Box<dyn Expr>> = Vec::new();
+        let mut current_i = i;
+        loop {
+            let i = current_i;
+            let (i, expr) = BinaryExpr::parse(i)?;
+            current_i = i;
+            exprs.push(expr);
+
+            match preceded(parse_space, tag("|"))(i) {
+                Ok((i, _)) => {
+                    current_i = i
+                },
+                Err(Err::Error(_)) => break,
+                Err(e) => return Err(e),
+            }
+        };
+        assert!(0 < exprs.len());
+        if 1 == exprs.len() {
+            let expr = exprs.into_iter().next().unwrap();
+            Ok((current_i, expr))
+        } else {
+            Ok((current_i, Box::new(UnionExpr { exprs })))
+        }
+    }
+}
+
+impl Expr for UnionExpr {
+    fn evaluate(&self) -> Value {
+        let mut real_values: BTreeSet<RealValue> = BTreeSet::new();
+        for expr in &self.exprs {
+            let value = expr.evaluate();
+            match value {
+                Value::Set(new_real_values) => {
+                    real_values.extend(new_real_values);
+                },
+                _ => {
+                    match RealValue::new(value) {
+                        Some(real_value) => {
+                            real_values.insert(real_value);
+                        },
+                        None => (),
+                    };
+                },
+            };
+        };
+        Value::Set(real_values)
+    }
 }
 
 #[derive(Debug)]

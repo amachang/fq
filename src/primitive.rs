@@ -3,6 +3,10 @@
 use std::{
     convert::From,
     cmp::Ordering,
+    hash::{
+        Hash,
+        Hasher,
+    },
     ops::{
         Neg,
         Add,
@@ -144,4 +148,91 @@ number_binary_operator_overload!(Sub, sub, checked_sub, -);
 number_binary_operator_overload!(Div, div, checked_div, /);
 number_binary_operator_overload!(Rem, rem, checked_rem, %);
 number_binary_operator_overload!(Mul, mul, checked_mul, *);
+
+#[derive(Debug, Copy, Clone, PartialEq)]
+pub enum RealNumber {
+    Integer(i64),
+    Float(f64),
+}
+
+impl RealNumber {
+    pub fn new(v: Number) -> Option<Self> {
+        match v {
+            Number::Integer(i) => Some(RealNumber::Integer(i)),
+            Number::Float(f) => {
+                if f.is_nan() {
+                    None
+                } else {
+                    Some(RealNumber::Float(f))
+                }
+            }
+        }
+    }
+}
+
+impl PartialOrd for RealNumber {
+    fn partial_cmp(&self, number: &Self) -> Option<Ordering> {
+        Some(self.cmp(number))
+    }
+}
+
+impl Ord for RealNumber {
+    fn cmp(&self, number: &Self) -> Ordering {
+        let opt_order = match (self, number) {
+            (Self::Integer(lv), Self::Integer(rv)) => Some(lv.cmp(rv)),
+            (Self::Integer(lv), Self::Float(rv)) => {
+                assert!(!rv.is_nan());
+                (*lv as f64).partial_cmp(rv)
+            }
+            (Self::Float(lv), Self::Integer(rv)) => {
+                assert!(!lv.is_nan());
+                lv.partial_cmp(&(*rv as f64))
+            }
+            (Self::Float(lv), Self::Float(rv)) => {
+                assert!(!lv.is_nan() && !rv.is_nan());
+                lv.partial_cmp(rv)
+            },
+        };
+        match opt_order {
+            Some(order) => order,
+            None => unreachable!(),
+        }
+    }
+}
+
+impl Eq for RealNumber {
+}
+
+impl Hash for RealNumber {
+    fn hash<H: Hasher>(&self, state: &mut H) {
+        match self {
+            Self::Integer(i) => i.hash(state),
+            Self::Float(f) => f.to_bits().hash(state),
+        }
+    }
+}
+
+impl Into<Number> for RealNumber {
+    fn into(self) -> Number {
+        match self {
+            Self::Integer(i) => Number::from(i),
+            Self::Float(f) => Number::from(f),
+        }
+    }
+}
+
+impl Into<Number> for &RealNumber {
+    fn into(self) -> Number {
+        (*self).into()
+    }
+}
+
+impl ToString for RealNumber {
+    fn to_string(&self) -> String {
+        match self {
+            Self::Integer(i) => i.to_string(),
+            Self::Float(f) => f.to_string(),
+        }
+    }
+}
 

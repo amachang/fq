@@ -50,6 +50,13 @@ fn test_parse() -> Result<(), String> {
         ("'inf' + 1", Value::from(f64::INFINITY)),
         ("'1' + '2'", Value::from(3)),
         (" \"hello world!\" ", Value::from("hello world!")),
+        ("1 | 2 | 3", Value::from([1, 2, 3])),
+        ("1.1e3 | 2.2e3 | 3.3e3", Value::from([1100, 2200, 3300])),
+        ("'1' | '2' | '3'", Value::from(["1", "2", "3"])),
+        ("1.1e3 | nan | inf", Value::from([1100.0, f64::INFINITY])),
+        ("1 = 1 | nan = nan", Value::from([true, false])),
+        ("1.1e3 | '2' | nan | inf | 1 = 1 | nan = nan", Value::from([ Value::from(1100), Value::from("2"), Value::from(f64::INFINITY),
+                                                                    Value::from(true), Value::from(false)])),
     ];
 
     for (source, result_value) in result_map {

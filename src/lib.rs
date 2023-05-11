@@ -6,10 +6,17 @@ mod value;
 mod expr;
 
 use parse_util::parse_eof;
-pub use primitive::Number;
-pub use value::Value;
+pub use primitive::{
+    Number,
+    RealNumber,
+};
+pub use value::{
+    Value,
+    RealValue,
+};
 pub use expr::{
     Expr,
+    UnionExpr,
     LiteralNumber,
     LiteralString,
     UnaryExpr,
@@ -23,7 +30,7 @@ use nom::{
 };
 
 fn parse_root(i: &str) -> IResult<&str, Box<dyn Expr>> {
-    let (i, expr) = BinaryExpr::parse(i)?;
+    let (i, expr) = UnionExpr::parse(i)?;
     let (i, _) = parse_eof(i)?;
     Ok((i, expr))
 }
