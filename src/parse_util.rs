@@ -2,9 +2,21 @@
 
 use nom::{
     IResult,
-    bytes::complete::take_while,
-    sequence::preceded,
-    combinator::eof,
+    bytes::complete::{
+        tag,
+        take_while,
+    },
+    character::complete::{alpha1, alphanumeric1},
+    sequence::{
+        preceded,
+        pair,
+    },
+    combinator::{
+        eof,
+        recognize,
+    },
+    branch::alt,
+    multi::many0_count,
 };
 
 pub fn parse_eof(i: &str) -> IResult<&str, &str> {
@@ -16,4 +28,12 @@ pub fn parse_space(i: &str) -> IResult<&str, &str> {
     take_while(move |c| chars.contains(c))(i)
 }
 
+pub fn parse_identifier(i: &str) -> IResult<&str, &str> {
+  recognize(
+    pair(
+      alt((alpha1, tag("_"))),
+      many0_count(alt((alphanumeric1, tag("_"))))
+    )
+  )(i)
+}
 

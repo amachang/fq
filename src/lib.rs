@@ -15,6 +15,8 @@ pub use value::{
     RealValue,
 };
 pub use expr::{
+    EvaluationContext,
+    Error,
     Expr,
     UnionExpr,
     LiteralNumber,
@@ -30,7 +32,7 @@ use nom::{
 };
 
 fn parse_root(i: &str) -> IResult<&str, Box<dyn Expr>> {
-    let (i, expr) = UnionExpr::parse(i)?;
+    let (i, expr) = expr::parse(i)?;
     let (i, _) = parse_eof(i)?;
     Ok((i, expr))
 }
@@ -40,5 +42,10 @@ pub fn parse(i: &str) -> Result<Box<dyn Expr>, nom::Err<nom::error::Error<&str>>
         Ok((_, expr)) => Ok(expr),
         Err(e) => Err(e),
     }
+}
+
+pub fn evaluate(expr: &dyn Expr) -> Result<Value, Error> {
+    let ctx = EvaluationContext::new();
+    expr.evaluate(&ctx)
 }
 

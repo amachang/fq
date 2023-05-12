@@ -3,6 +3,7 @@
 use super::primitive::{
     Number,
     RealNumber,
+    RealNumberError,
 };
 
 use std::{
@@ -22,7 +23,7 @@ use std::{
     },
 };
 
-#[derive(Debug, PartialEq)]
+#[derive(Debug, Clone, PartialEq)]
 pub enum Value {
     Number(Number),
     Boolean(bool),
@@ -35,6 +36,11 @@ pub enum RealValue {
     Number(RealNumber),
     Boolean(bool),
     String(String),
+}
+
+pub enum RealValueError {
+    InvalidFloatNumber,
+    EmptySet,
 }
 
 impl Value {
@@ -155,7 +161,11 @@ impl Into<String> for &Value {
             Value::String(string) => string.clone(),
             Value::Set(values) => {
                 match values.iter().cloned().next() {
-                    Some(real_value) => real_value.to_string(),
+                    Some(real_value) => {
+                        let value: Value = real_value.into();
+                        let string: String = value.into();
+                        string
+                    },
                     None => String::from(""),
                 }
             },
@@ -167,11 +177,11 @@ impl<const N: usize> From<[Value; N]> for Value {
     fn from(vs: [Value; N]) -> Self {
         let mut values = BTreeSet::new();
         for v in vs {
-            match RealValue::new(v) {
-                Some(real_value) => {
+            match RealValue::try_from(&v) {
+                Ok(real_value) => {
                     values.insert(real_value);
                 },
-                None => (),
+                Err(_) => (),
             };
         };
         return Value::Set(values)
@@ -182,11 +192,11 @@ impl<const N: usize> From<[i64; N]> for Value {
     fn from(is: [i64; N]) -> Self {
         let mut values = BTreeSet::new();
         for i in is {
-            match RealNumber::new(Number::from(i)) {
-                Some(real_number) => {
+            match RealNumber::try_from(Number::from(i)) {
+                Ok(real_number) => {
                     values.insert(RealValue::Number(real_number));
                 },
-                None => (),
+                Err(_) => (),
             };
         };
         return Value::Set(values)
@@ -197,11 +207,11 @@ impl<const N: usize> From<[f64; N]> for Value {
     fn from(fs: [f64; N]) -> Self {
         let mut values = BTreeSet::new();
         for f in fs {
-            match RealNumber::new(Number::from(f)) {
-                Some(real_number) => {
+            match RealNumber::try_from(Number::from(f)) {
+                Ok(real_number) => {
                     values.insert(RealValue::Number(real_number));
                 },
-                None => (),
+                Err(_) => (),
             };
         };
         return Value::Set(values)
@@ -263,24 +273,6 @@ value_binary_operator!(Div, div, Number, Number, /);
 value_binary_operator!(Rem, rem, Number, Number, %);
 value_binary_operator!(Mul, mul, Number, Number, *);
 
-impl RealValue {
-    pub fn new(v: Value) -> Option<Self> {
-        match v {
-            Value::Number(number) => {
-                match RealNumber::new(number) {
-                    Some(real_number) => Some(Self::Number(real_number)),
-                    None => None,
-                }
-            }
-            Value::Boolean(boolean) => Some(Self::Boolean(boolean)),
-            Value::String(string) => Some(Self::String(string)),
-            Value::Set(set) => {
-                set.iter().cloned().next()
-            },
-        }
-    }
-}
-
 impl PartialOrd for RealValue {
     fn partial_cmp(&self, v: &Self) -> Option<Ordering> {
         Some(self.cmp(v))
@@ -289,9 +281,34 @@ impl PartialOrd for RealValue {
 
 impl Ord for RealValue {
     fn cmp(&self, v: &Self) -> Ordering {
-        let r_str: String = self.into();
-        let l_str: String = v.into();
+        let rv: Value = self.into();
+        let r_str: String = rv.into();
+        let lv: Value = v.into();
+        let l_str: String = lv.into();
         r_str.cmp(&l_str)
+    }
+}
+
+impl TryFrom<&Value> for RealValue {
+    type Error = RealValueError;
+
+    fn try_from(v: &Value) -> Result<Self, Self::Error> {
+        match v {
+            Value::Number(number) => {
+                match RealNumber::try_from(*number) {
+                    Ok(real_number) => Ok(Self::Number(real_number)),
+                    Err(RealNumberError::InvalidFloat) => Err(Self::Error::InvalidFloatNumber),
+                }
+            }
+            Value::Boolean(boolean) => Ok(Self::Boolean(*boolean)),
+            Value::String(string) => Ok(Self::String(string.clone())),
+            Value::Set(set) => {
+                match set.iter().cloned().next() {
+                    Some(real_value) => Ok(real_value),
+                    None => Err(Self::Error::EmptySet),
+                }
+            },
+        }
     }
 }
 
@@ -314,25 +331,3 @@ impl Into<Value> for &RealValue {
     }
 }
 
-impl Into<String> for RealValue {
-    fn into(self) -> String {
-        (&self).into()
-    }
-}
-
-impl Into<String> for &RealValue {
-    fn into(self) -> String {
-        match self {
-            RealValue::Number(real_number) => real_number.to_string(),
-            RealValue::Boolean(boolean) => boolean.to_string(),
-            RealValue::String(string) => string.clone(),
-        }
-    }
-}
-
-impl ToString for RealValue {
-    fn to_string(&self) -> String {
-        let str: String = self.into();
-        str
-    }
-}

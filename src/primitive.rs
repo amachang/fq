@@ -155,19 +155,8 @@ pub enum RealNumber {
     Float(f64),
 }
 
-impl RealNumber {
-    pub fn new(v: Number) -> Option<Self> {
-        match v {
-            Number::Integer(i) => Some(RealNumber::Integer(i)),
-            Number::Float(f) => {
-                if f.is_nan() {
-                    None
-                } else {
-                    Some(RealNumber::Float(f))
-                }
-            }
-        }
-    }
+pub enum RealNumberError {
+    InvalidFloat,
 }
 
 impl PartialOrd for RealNumber {
@@ -217,6 +206,23 @@ impl Into<Number> for RealNumber {
         match self {
             Self::Integer(i) => Number::from(i),
             Self::Float(f) => Number::from(f),
+        }
+    }
+}
+
+impl TryFrom<Number> for RealNumber {
+    type Error = RealNumberError;
+
+    fn try_from(v: Number) -> Result<Self, Self::Error> {
+        match v {
+            Number::Integer(i) => Ok(RealNumber::Integer(i)),
+            Number::Float(f) => {
+                if f.is_nan() {
+                    Err(RealNumberError::InvalidFloat)
+                } else {
+                    Ok(RealNumber::Float(f))
+                }
+            }
         }
     }
 }

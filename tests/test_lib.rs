@@ -2,17 +2,15 @@
 
 use fq::{
     parse,
+    evaluate,
     Number,
     Value,
     BinaryOperator,
-    Expr,
+    BinaryExpr,
+    UnionExpr,
 };
 use nom::{
     Err,
-    error::{
-        Error,
-        ErrorKind,
-    }
 };
 
 #[test]
@@ -38,8 +36,38 @@ fn test_binary_operator() {
 }
 
 #[test]
-fn test_parse() -> Result<(), String> {
+fn test_binary_expression() {
+    let source_evaluated_value_remaining_input_map = [
+        ("1 + 2", Value::from(3), ""),
+        ("4 div 2 errorerror", Value::from(2), " errorerror"),
+        ("1 == 1", Value::from(1), " == 1"),
+    ];
+    for (source, evaluated_value, remaining_input) in source_evaluated_value_remaining_input_map {
+        let (i, expr) = BinaryExpr::parse(source).unwrap();
+        assert_eq!(evaluate(&*expr).unwrap(), evaluated_value);
+        assert_eq!(i, remaining_input);
+    }
+}
+
+#[test]
+fn test_union_expression() {
+    let source_evaluated_value_remaining_input_map = [
+        ("1 | 2", Value::from([1, 2]), ""),
+        ("'1' | '2' | '3' errorerror", Value::from(["1", "2", "3"]), " errorerror"),
+        ("1 == 1", Value::from(1), " == 1"),
+    ];
+    for (source, evaluated_value, remaining_input) in source_evaluated_value_remaining_input_map {
+        let (i, expr) = UnionExpr::parse(source).unwrap();
+        assert_eq!(evaluate(&*expr).unwrap(), evaluated_value);
+        assert_eq!(i, remaining_input);
+    }
+}
+
+#[test]
+fn test_parse() {
     let result_map = [
+        ("string(123)", Value::from("123")),
+        ("string(1 = 1)", Value::from("true")),
         ("-30", Value::from(-30)),
         ("30", Value::from(30)),
         ("1e10", Value::from(10000000000)),
@@ -60,25 +88,26 @@ fn test_parse() -> Result<(), String> {
     ];
 
     for (source, result_value) in result_map {
-        assert_eq!(ok(parse(source))?.evaluate(), result_value);
+        assert_eq!(evaluate(&*parse(source).unwrap()).unwrap(), result_value);
     }
 
-    assert_eq!(err(parse("-30A"))?, Err::Error(Error::new("A", ErrorKind::Eof)));
-    assert!(ok(parse("nan"))?.evaluate().is_nan());
-    assert!(ok(parse("-'test'"))?.evaluate().is_nan());
-    Ok(())
+    let error_map = [
+        ("-30A", "A"),
+        ("string(unknown_identifier)", "unknown_identifier)"),
+        ("1 == 1", "== 1"),
+    ];
+
+    for (source, remaining_input) in error_map {
+        let result = parse(source);
+        assert!(result.is_err());
+        let err = match result {
+            Err(Err::Error(err)) | Err(Err::Failure(err)) => err,
+            _ => unreachable!(),
+        };
+        assert_eq!(err.input, remaining_input);
+    }
+
+    assert!(evaluate(&*parse("nan").unwrap()).unwrap().is_nan());
+    assert!(evaluate(&*parse("-'test'").unwrap()).unwrap().is_nan());
 }
 
-fn err(result: Result<Box<dyn Expr>, Err<Error<&str>>>) -> Result<Err<Error<&str>>, String> {
-    match result {
-        Ok(node) => Err(format!("{node:?}")),
-        Err(e) => Ok(e),
-    }
-}
-
-fn ok(result: Result<Box<dyn Expr>, Err<Error<&str>>>) -> Result<Box<dyn Expr>, String> {
-    match result {
-        Ok(node) => Ok(node),
-        Err(e) => Err(format!("{e}")),
-    }
-}
