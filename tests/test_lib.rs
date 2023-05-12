@@ -68,6 +68,8 @@ fn test_parse() {
     let result_map = [
         ("string(123)", Value::from("123")),
         ("string(1 = 1)", Value::from("true")),
+        ("set(1.1e3, '2', nan, inf | 1 = 1 | nan = nan)", Value::from([ Value::from(1100), Value::from("2"), Value::from(f64::INFINITY),
+                                                                    Value::from(true), Value::from(false)])),
         ("-30", Value::from(-30)),
         ("30", Value::from(30)),
         ("1e10", Value::from(10000000000)),
