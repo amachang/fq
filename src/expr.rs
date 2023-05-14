@@ -7,8 +7,6 @@ use super::{
     },
     value::{
         Value,
-        RealValue,
-        RealValueError,
     },
     primitive::{
         Number,
@@ -18,9 +16,11 @@ use super::{
 use std::{
     fmt::Debug,
     collections::{
-        BTreeSet,
         HashMap,
     },
+    io,
+    path,
+    path::PathBuf,
 };
 
 use nom::{
@@ -29,9 +29,14 @@ use nom::{
         tag,
         take_until,
     },
+    character::complete::satisfy,
     number::complete::float,
-    sequence::preceded,
+    sequence::{
+        preceded,
+        pair,
+    },
     branch::alt,
+    combinator::recognize,
     Err,
     error::{
         ParseError,
@@ -39,57 +44,50 @@ use nom::{
     },
 };
 
-pub struct EvaluationContext {
+pub struct EvaluationContext <'a> {
+    pub(crate) parent: Option<Box<&'a EvaluationContext<'a>>>,
     pub(crate) fn_map: HashMap<String, fn(&[Value]) -> Value>,
     pub(crate) var_map: HashMap<String, Value>,
+    pub(crate) context_value: &'a Value,
 }
 
-impl EvaluationContext {
-    pub fn new() -> EvaluationContext {
-        let mut ctx = EvaluationContext { fn_map: HashMap::new(), var_map: HashMap::new() };
+impl<'a> EvaluationContext <'a> {
+    pub fn new(context_value: &'a Value) -> EvaluationContext {
+        let mut ctx = EvaluationContext { parent: None, fn_map: HashMap::new(), var_map: HashMap::new(), context_value: context_value, };
         ctx.register_function("string", |vs| {
             if vs.len() < 1 {
                 Value::from("")
             } else {
-                let v: String = (&vs[0]).into();
-                Value::from(v)
+                /* TODO strip clone */
+                vs[0].clone().as_string()
             }
         });
         ctx.register_function("number", |vs| {
             if vs.len() < 1 {
                 Value::from(f64::NAN)
             } else {
-                let v: Number = (&vs[0]).into();
-                Value::from(v)
+                /* TODO strip clone */
+                vs[0].clone().as_number()
             }
         });
-        ctx.register_function("bool", |vs| {
+        ctx.register_function("boolean", |vs| {
             if vs.len() < 1 {
                 Value::from(false)
             } else {
-                let v: bool = (&vs[0]).into();
-                Value::from(v)
+                /* TODO strip clone */
+                vs[0].clone().as_boolean()
+            }
+        });
+        ctx.register_function("path", |vs| {
+            if vs.len() < 1 {
+                Value::from(false)
+            } else {
+                /* TODO strip clone */
+                vs[0].clone().as_path()
             }
         });
         ctx.register_function("set", |vs| {
-            let mut real_values: BTreeSet<RealValue> = BTreeSet::new();
-            for v in vs {
-                match v {
-                    Value::Set(new_real_values) => {
-                        real_values.extend(new_real_values.clone());
-                    },
-                    _ => {
-                        match RealValue::try_from(v) {
-                            Ok(real_value) => {
-                                real_values.insert(real_value);
-                            },
-                            Err(RealValueError::InvalidFloatNumber) => (),
-                            Err(RealValueError::EmptySet) => unreachable!(),
-                        };
-                    },
-                };
-            };
-            Value::Set(real_values)
+            Value::from(vs)
         });
         ctx
     }
@@ -99,7 +97,13 @@ impl EvaluationContext {
     }
 
     pub fn get_function(&self, key: impl AsRef<str>) -> Option<&fn(&[Value]) -> Value> {
-        self.fn_map.get(key.as_ref())
+        match self.fn_map.get(key.as_ref()) {
+            Some(function) => Some(function),
+            None => match &self.parent {
+                Some(parent) => parent.get_function(key),
+                None => None,
+            },
+        }
     }
 
     pub fn set_variable(&mut self, key: impl AsRef<str>, value: Value) {
@@ -107,13 +111,33 @@ impl EvaluationContext {
     }
 
     pub fn get_variable(&self, key: impl AsRef<str>) -> Option<&Value> {
-        self.var_map.get(key.as_ref())
+        match self.var_map.get(key.as_ref()) {
+            Some(variable) => Some(variable),
+            None => match &self.parent {
+                Some(parent) => parent.get_variable(key),
+                None => None,
+            },
+        }
+    }
+
+    pub fn get_context_value(&self) -> &Value {
+        self.context_value
+    }
+
+    pub fn scope(&'a self, value: &'a Value) -> Self {
+        Self {
+            parent: Some(Box::new(self)),
+            fn_map: HashMap::new(),
+            var_map: HashMap::new(),
+            context_value: value,
+        }
     }
 }
 
 #[derive(Debug, Eq, PartialEq)]
 pub enum Error {
     FunctionNotFound(String),
+    CouldntGetCurrentDir(io::ErrorKind, String),
 }
 
 pub trait Expr: Debug {
@@ -175,25 +199,200 @@ impl UnionExpr {
 
 impl Expr for UnionExpr {
     fn evaluate(&self, ctx: &EvaluationContext) -> Result<Value, Error> {
-        let mut real_values: BTreeSet<RealValue> = BTreeSet::new();
-        for expr in &self.exprs {
-            let value = expr.evaluate(ctx)?;
-            match value {
-                Value::Set(new_real_values) => {
-                    real_values.extend(new_real_values);
-                },
-                _ => {
-                    match RealValue::try_from(&value) {
-                        Ok(real_value) => {
-                            real_values.insert(real_value);
-                        },
-                        Err(RealValueError::InvalidFloatNumber) => (),
-                        Err(RealValueError::EmptySet) => unreachable!(),
-                    };
-                },
-            };
+        let values: Vec<Value> = self.exprs.iter().map(|expr| Ok(expr.evaluate(ctx)?)).collect::<Result<Vec<Value>, Error>>()?;
+        Ok(Value::from(values))
+    }
+}
+
+#[derive(Debug)]
+pub struct PathExpr {
+    root_expr: Box<dyn Expr>,
+    step_exprs: Vec<Box<dyn Expr>>,
+}
+
+impl PathExpr {
+    pub fn parse(i: &str) -> IResult<&str, Box<dyn Expr>> {
+        let (i, root_expr) = match LiteralRootPath::parse(i) {
+            Ok(r) => r,
+            Err(Err::Error(_)) => {
+                let (i, root_expr) = PathRootExpr::parse(i)?;
+                match preceded(parse_space, tag(path::MAIN_SEPARATOR_STR))(i) {
+                    Ok(_) => (),
+                    Err(Err::Error(_)) => return Ok((i, root_expr)),
+                    Err(e) => return Err(e),
+                };
+                (i, root_expr)
+            },
+            Err(e) => return Err(e),
         };
-        Ok(Value::Set(real_values))
+        let (i, step_exprs) = parse_expr_list(path::MAIN_SEPARATOR_STR, i, PathStepExpr::parse)?;
+        Ok((i, Box::new(PathExpr { root_expr, step_exprs })))
+    }
+}
+
+impl Expr for PathExpr {
+    fn evaluate(&self, ctx: &EvaluationContext) -> Result<Value, Error> {
+        let mut next_value = self.root_expr.evaluate(ctx)?;
+        for expr in &self.step_exprs {
+            let value = next_value;
+            let mut values = Vec::new();
+            for context_value in &value {
+                let ctx = ctx.scope(&context_value);
+                let value = expr.evaluate(&ctx)?;
+                values.push(value);
+            };
+            next_value = Value::from(values);
+        };
+        return Ok(next_value)
+    }
+}
+
+impl PartialEq for PathExpr {
+    fn eq(&self, expr: &Self) -> bool {
+        *self.root_expr == *expr.root_expr && self.step_exprs == expr.step_exprs
+    }
+}
+
+#[derive(Debug)]
+pub struct PathRootExpr {
+    expr: Box<dyn Expr>,
+    predicate_exprs: Vec<Box<dyn Expr>>,
+}
+
+impl PathRootExpr {
+    pub fn parse(i: &str) -> IResult<&str, Box<dyn Expr>> {
+        let (i, expr) = alt((
+                LiteralString::parse,
+                LiteralNumber::parse,
+                FunctionCall::parse,
+        ))(i)?;
+
+        let mut predicate_exprs: Vec<Box<dyn Expr>> = Vec::new();
+        let mut next_i = i;
+        loop {
+            let i = next_i;
+            let (i, _) = match preceded(parse_space, tag("["))(i) {
+                Ok(r) => r,
+                Err(Err::Error(_)) => break,
+                Err(e) => return Err(e),
+            };
+            let (i, predicate_expr) = match parse(i) {
+                Ok(r) => r,
+                Err(Err::Error(e)) => return Err(Err::Failure(e)),
+                Err(e) => return Err(e),
+            };
+            let (i, _) = match preceded(parse_space, tag("]"))(i) {
+                Ok(r) => r,
+                Err(Err::Error(e)) => return Err(Err::Failure(e)),
+                Err(e) => return Err(e),
+            };
+            predicate_exprs.push(predicate_expr);
+            next_i = i
+        };
+        if 0 == predicate_exprs.len() {
+            Ok((next_i, expr))
+        } else {
+            Ok((next_i, Box::new(PathRootExpr { expr, predicate_exprs })))
+        }
+    }
+}
+
+impl Expr for PathRootExpr {
+    fn evaluate(&self, ctx: &EvaluationContext) -> Result<Value, Error> {
+        let value = self.expr.evaluate(ctx)?;
+        let mut next_value = value;
+        for predicate_expr in &self.predicate_exprs {
+            let value = next_value;
+            let mut values = Vec::new();
+            for context_value in &value {
+                let ctx = &ctx.scope(&context_value);
+                let predicate_value = predicate_expr.evaluate(ctx)?;
+                let predicate_value: bool = predicate_value.into();
+
+                if predicate_value {
+                    values.push(context_value.clone());
+                };
+            };
+            next_value = Value::from(values);
+        };
+        Ok(next_value)
+    }
+}
+
+impl PartialEq for PathRootExpr {
+    fn eq(&self, expr: &Self) -> bool {
+        *self.expr == *expr.expr && self.predicate_exprs == expr.predicate_exprs
+    }
+}
+
+#[derive(Debug, PartialEq)]
+pub struct PathStepExpr {
+    name: String,
+}
+
+impl PathStepExpr {
+    pub fn parse(i: &str) -> IResult<&str, Box<dyn Expr>> {
+        println!("start parse path step: {:?}", i);
+        let (i, name) = preceded(
+            parse_space,
+            parse_identifier,
+        )(i)?;
+        println!("end parse path step: {:?}", name);
+        let name = name.to_string();
+        Ok((i, Box::new(PathStepExpr { name })))
+    }
+}
+
+impl Expr for PathStepExpr {
+    fn evaluate(&self, ctx: &EvaluationContext) -> Result<Value, Error> {
+        let context_value = ctx.get_context_value();
+        Ok(Value::join_path(context_value, self.name.clone()))
+    }
+}
+
+#[derive(Debug, Eq, PartialEq)]
+pub struct LiteralRootPath {
+    path: PathBuf
+}
+
+impl LiteralRootPath {
+    #[cfg(not(windows))]
+    pub fn parse(i: &str) -> IResult<&str, Box<dyn Expr>> {
+        Self::parse_for_unix(i)
+    }
+
+    #[cfg(windows)]
+    pub fn parse(i: &str) -> IResult<&str, Box<dyn Expr>> {
+        Self::parse_for_windows(i)
+    }
+
+    pub fn parse_for_unix(i: &str) -> IResult<&str, Box<dyn Expr>> {
+        let (i, path) = preceded(parse_space, tag("/"))(i)?;
+        Ok((i, Box::new(LiteralRootPath { path: PathBuf::from(path) })))
+    }
+
+    pub fn parse_for_windows(i: &str) -> IResult<&str, Box<dyn Expr>> {
+        let (i, path) = preceded(
+            parse_space,
+            recognize(
+                alt((
+                        tag(r"\"),
+                        Self::parse_windows_drive_root,
+                        recognize(pair(alt((tag(r"\\?\"), tag(r"\\.\"))), Self::parse_windows_drive_root)),
+                ))
+            )
+        )(i)?;
+        Ok((i, Box::new(LiteralRootPath { path: PathBuf::from(path) })))
+    }
+
+    fn parse_windows_drive_root(i: &str) -> IResult<&str, &str> {
+        recognize(pair(satisfy(|c| 'A' <= c && c <= 'Z'), tag(r":\")))(i)
+    }
+}
+
+impl Expr for LiteralRootPath {
+    fn evaluate(&self, _: &EvaluationContext) -> Result<Value, Error> {
+        Ok(Value::from([self.path.clone()]))
     }
 }
 
@@ -210,11 +409,7 @@ impl UnaryExpr {
                 let (i, expr) = UnaryExpr::parse(i)?;
                 Ok((i, Box::new(UnaryExpr { op, expr })))
             }
-            Err(Err::Error(_)) => alt((
-                LiteralString::parse,
-                LiteralNumber::parse,
-                FunctionCall::parse,
-            ))(i),
+            Err(Err::Error(_)) => PathExpr::parse(i),
             Err(e) => Err(e),
         }
     }
@@ -226,7 +421,13 @@ impl Expr for UnaryExpr {
     }
 }
 
-#[derive(Debug, PartialEq)]
+impl PartialEq for UnaryExpr {
+    fn eq(&self, expr: &Self) -> bool {
+        self.op == expr.op && *self.expr == *expr.expr
+    }
+}
+
+#[derive(Debug, Eq, PartialEq)]
 pub enum UnaryOperator {
     Minus,
 }
@@ -255,12 +456,6 @@ impl UnaryOperator {
     }
 }
 
-impl PartialEq for UnaryExpr {
-    fn eq(&self, expr: &Self) -> bool {
-        self.op == expr.op && *self.expr == *expr.expr
-    }
-}
-
 #[derive(Debug, PartialEq)]
 pub struct LiteralNumber {
     number: Number,
@@ -276,7 +471,7 @@ impl LiteralNumber {
 
 impl Expr for LiteralNumber {
     fn evaluate(&self, _: &EvaluationContext) -> Result<Value, Error> {
-        Ok(Value::Number(self.number))
+        Ok(Value::from(self.number))
     }
 }
 
@@ -349,7 +544,7 @@ impl LiteralString {
 
 impl Expr for LiteralString {
     fn evaluate(&self, _: &EvaluationContext) -> Result<Value, Error> {
-        Ok(Value::String(self.string.clone()))
+        Ok(Value::from(self.string.clone()))
     }
 }
 
@@ -496,14 +691,14 @@ impl BinaryOperator {
             Self::Multiplication => lv * rv,
             Self::Addition => lv + rv,
             Self::Subtraction => lv - rv,
-            Self::LessThan => Value::Boolean(lv < rv),
-            Self::LessThanEqual => Value::Boolean(lv <= rv),
-            Self::GreaterThan => Value::Boolean(lv > rv),
-            Self::GreaterThanEqual => Value::Boolean(lv >= rv),
-            Self::Equal => Value::Boolean(lv == rv),
-            Self::NotEqual => Value::Boolean(lv != rv),
-            Self::And => Value::Boolean(lv.into() && rv.into()),
-            Self::Or => Value::Boolean(lv.into() || rv.into()),
+            Self::LessThan => Value::from(lv < rv),
+            Self::LessThanEqual => Value::from(lv <= rv),
+            Self::GreaterThan => Value::from(lv > rv),
+            Self::GreaterThanEqual => Value::from(lv >= rv),
+            Self::Equal => Value::from(lv == rv),
+            Self::NotEqual => Value::from(lv != rv),
+            Self::And => Value::from(lv.into() && rv.into()),
+            Self::Or => Value::from(lv.into() || rv.into()),
         }
     }
 }

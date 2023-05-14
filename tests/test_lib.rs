@@ -1,5 +1,7 @@
 #![deny(warnings, clippy::all, clippy::pedantic)]
 
+use std::path::PathBuf;
+
 use fq::{
     parse,
     evaluate,
@@ -66,6 +68,11 @@ fn test_union_expression() {
 #[test]
 fn test_parse() {
     let result_map = [
+        ("/", Value::from([PathBuf::from("/")])),
+        ("/tmp", Value::from([PathBuf::from("/tmp")])),
+        ("/foo/bar", Value::from([PathBuf::from("/foo/bar")])),
+        ("path('/foo/bar')[1 = 1]", Value::from([PathBuf::from("/").join("foo").join("bar")])),
+        ("path('/tmp')[1 = 2]", Value::from(Vec::new())),
         ("string(123)", Value::from("123")),
         ("string(1 = 1)", Value::from("true")),
         ("set(1.1e3, '2', nan, inf | 1 = 1 | nan = nan)", Value::from([ Value::from(1100), Value::from("2"), Value::from(f64::INFINITY),

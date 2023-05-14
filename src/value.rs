@@ -12,7 +12,10 @@ use std::{
         Into,
     },
     cmp::Ordering,
-    collections::BTreeSet,
+    collections::{
+        BTreeSet,
+        btree_set,
+    },
     ops::{
         Neg,
         Add,
@@ -21,6 +24,7 @@ use std::{
         Rem,
         Mul,
     },
+    path::PathBuf,
 };
 
 #[derive(Debug, Clone, PartialEq)]
@@ -28,6 +32,7 @@ pub enum Value {
     Number(Number),
     Boolean(bool),
     String(String),
+    Path(PathBuf),
     Set(BTreeSet<RealValue>),
 }
 
@@ -35,6 +40,7 @@ pub enum Value {
 pub enum RealValue {
     Number(RealNumber),
     Boolean(bool),
+    Path(PathBuf),
     String(String),
 }
 
@@ -47,6 +53,60 @@ impl Value {
     pub fn is_nan(&self) -> bool {
         let v: Number = self.into();
         v.is_nan()
+    }
+}
+
+impl Value {
+    pub fn as_string(self) -> Self {
+        match self {
+            Value::String(_) => self,
+            _ => {
+                let v: String = self.into();
+                Value::from(v)
+            },
+        }
+    }
+
+    pub fn as_number(self) -> Self {
+        match self {
+            Value::Number(_) => self,
+            _ => {
+                let v: Number = self.into();
+                Value::from(v)
+            },
+        }
+    }
+
+    pub fn as_boolean(self) -> Self {
+        match self {
+            Value::Boolean(_) => self,
+            _ => {
+                let v: bool = self.into();
+                Value::from(v)
+            },
+        }
+    }
+
+    pub fn as_path(self) -> Self {
+        match self {
+            Value::Path(_) => self,
+            _ => {
+                let v: PathBuf = self.into();
+                Value::from(v)
+            },
+        }
+    }
+
+    pub fn as_set(self) -> Self {
+        match self {
+            Value::Set(_) => self,
+            _ => Value::from([self.clone()]),
+        }
+    }
+
+    pub fn join_path(value: &Value, path_component_str: String) -> Value {
+        let path: PathBuf = value.into();
+        Value::from(path.join(path_component_str))
     }
 }
 
@@ -73,6 +133,7 @@ impl Into<bool> for &Value {
             },
             Value::Boolean(boolean) => *boolean,
             Value::String(string) => 0 < string.len(),
+            Value::Path(_) => true,
             Value::Set(set) => 0 < set.len(),
         }
     }
@@ -101,6 +162,7 @@ impl Into<Number> for &Value {
                     Err(_) => Number::from(f64::NAN),
                 }
             },
+            Value::Path(_) => Number::from(f64::NAN),
             Value::Set(set) => {
                 match set.iter().cloned().next() {
                     Some(real_value) => {
@@ -159,6 +221,8 @@ impl Into<String> for &Value {
             Value::Number(number) => number.to_string(),
             Value::Boolean(boolean) => boolean.to_string(),
             Value::String(string) => string.clone(),
+            Value::Path(path) => path.to_string_lossy().into_owned(), // TODO String should be
+                                                                      // contains OsString
             Value::Set(values) => {
                 match values.iter().cloned().next() {
                     Some(real_value) => {
@@ -173,18 +237,71 @@ impl Into<String> for &Value {
     }
 }
 
+impl From<PathBuf> for Value {
+    fn from(path: PathBuf) -> Self {
+        Self::Path(path)
+    }
+}
+
+impl From<Vec<Value>> for Value {
+    fn from(vs: Vec<Value>) -> Self {
+        let real_values = vs.iter().flat_map(|v| {
+            match v {
+                Value::Set(new_real_values) => new_real_values.clone(),
+                _ => {
+                    match RealValue::try_from(v) {
+                        Ok(real_value) => {
+                            let mut set = BTreeSet::new();
+                            set.insert(real_value);
+                            set
+                        },
+                        Err(RealValueError::InvalidFloatNumber) => BTreeSet::new(),
+                        Err(RealValueError::EmptySet) => unreachable!(),
+                    }
+                },
+            }
+        }).collect();
+        return Value::Set(real_values)
+    }
+}
+
+impl Into<PathBuf> for Value {
+    fn into(self) -> PathBuf {
+        (&self).into()
+    }
+}
+
+impl Into<PathBuf> for &Value {
+    fn into(self) -> PathBuf {
+        match self {
+            Value::Number(number) => PathBuf::from(number.to_string()),
+            Value::Boolean(boolean) => PathBuf::from(boolean.to_string()),
+            Value::String(string) => PathBuf::from(string),
+            Value::Path(path) => path.clone(),
+            Value::Set(values) => {
+                match values.iter().cloned().next() {
+                    Some(real_value) => {
+                        let value: Value = real_value.into();
+                        let path: PathBuf = value.into();
+                        path
+                    },
+                    None => PathBuf::from("."),
+                }
+            },
+        }
+    }
+}
+
+impl From<&[Value]> for Value {
+    fn from(vs: &[Value]) -> Self {
+        Value::from(vs.to_vec())
+    }
+}
+
 impl<const N: usize> From<[Value; N]> for Value {
     fn from(vs: [Value; N]) -> Self {
-        let mut values = BTreeSet::new();
-        for v in vs {
-            match RealValue::try_from(&v) {
-                Ok(real_value) => {
-                    values.insert(real_value);
-                },
-                Err(_) => (),
-            };
-        };
-        return Value::Set(values)
+        let vs: &[Value] = &vs;
+        Value::from(vs)
     }
 }
 
@@ -235,6 +352,54 @@ impl<const N: usize> From<[&str; N]> for Value {
             values.insert(RealValue::String(s.to_string()));
         };
         return Value::Set(values)
+    }
+}
+
+impl<const N: usize> From<[PathBuf; N]> for Value {
+    fn from(ps: [PathBuf; N]) -> Self {
+        let mut values = BTreeSet::new();
+        for p in ps {
+            values.insert(RealValue::Path(p));
+        };
+        return Value::Set(values)
+    }
+}
+
+pub enum ValueIterator<'a> {
+    SetIterator(btree_set::Iter<'a, RealValue>),
+    SingleIterator(&'a Value, bool),
+}
+
+impl<'a> Iterator for ValueIterator<'a> {
+    type Item = Value;
+
+    fn next(&mut self) -> Option<Self::Item> {
+
+        match self {
+            Self::SetIterator(iter) => {
+                let real_value = iter.next()?;
+                let value: Value = real_value.into();
+                Some(value)
+            },
+            Self::SingleIterator(value, false) => {
+                let result_value = (*value).clone();
+                *self = Self::SingleIterator(*value, true);
+                Some(result_value)
+            },
+            Self::SingleIterator(_, true) => None,
+        }
+    }
+}
+
+impl<'a> IntoIterator for &'a Value {
+    type Item = Value;
+    type IntoIter = ValueIterator<'a>;
+
+    fn into_iter(self) -> Self::IntoIter {
+        match self {
+            Value::Set(set) => ValueIterator::SetIterator(set.iter()),
+            _ => return ValueIterator::SingleIterator(self, false),
+        }
     }
 }
 
@@ -302,6 +467,7 @@ impl TryFrom<&Value> for RealValue {
             }
             Value::Boolean(boolean) => Ok(Self::Boolean(*boolean)),
             Value::String(string) => Ok(Self::String(string.clone())),
+            Value::Path(path) => Ok(Self::Path(path.clone())),
             Value::Set(set) => {
                 match set.iter().cloned().next() {
                     Some(real_value) => Ok(real_value),
@@ -325,6 +491,7 @@ impl Into<Value> for &RealValue {
                 let number: Number = real_number.into();
                 Value::from(number)
             }
+            RealValue::Path(path) => Value::from(path.clone()),
             RealValue::Boolean(boolean) => Value::from(*boolean),
             RealValue::String(string) => Value::from(string.clone()),
         }

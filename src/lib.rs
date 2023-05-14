@@ -5,6 +5,8 @@ mod primitive;
 mod value;
 mod expr;
 
+use std::env::current_dir;
+
 use parse_util::parse_eof;
 pub use primitive::{
     Number,
@@ -25,6 +27,9 @@ pub use expr::{
     UnaryOperator,
     BinaryExpr,
     BinaryOperator,
+    PathRootExpr,
+    PathStepExpr,
+    LiteralRootPath,
 };
 
 use nom::{
@@ -45,7 +50,12 @@ pub fn parse(i: &str) -> Result<Box<dyn Expr>, nom::Err<nom::error::Error<&str>>
 }
 
 pub fn evaluate(expr: &dyn Expr) -> Result<Value, Error> {
-    let ctx = EvaluationContext::new();
+    let current_dir = match current_dir() {
+        Ok(dir) => dir,
+        Err(err) => return Err(Error::CouldntGetCurrentDir(err.kind(), err.to_string())),
+    };
+    let context_value = Value::from(current_dir);
+    let ctx = EvaluationContext::new(&context_value);
     expr.evaluate(&ctx)
 }
 
