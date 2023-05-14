@@ -13,3 +13,4 @@ name = "fq"
 
 [dependencies]
 nom = "7"
+regex = "1.8"
