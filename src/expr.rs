@@ -267,6 +267,49 @@ impl PathRootExpr {
                 FunctionCall::parse,
         ))(i)?;
 
+        let (i, predicate_exprs) = PathStepExpr::parse_predicates(i)?;
+
+        if 0 == predicate_exprs.len() {
+            Ok((i, expr))
+        } else {
+            Ok((i, Box::new(PathRootExpr { expr, predicate_exprs })))
+        }
+    }
+}
+
+impl Expr for PathRootExpr {
+    fn evaluate(&self, ctx: &EvaluationContext) -> Result<Value, Error> {
+        let value = self.expr.evaluate(ctx)?;
+        PathStepExpr::evaluate_predicates(ctx, &self.predicate_exprs, value)
+    }
+}
+
+impl PartialEq for PathRootExpr {
+    fn eq(&self, expr: &Self) -> bool {
+        *self.expr == *expr.expr && self.predicate_exprs == expr.predicate_exprs
+    }
+}
+
+#[derive(Debug, PartialEq)]
+pub struct PathStepExpr {
+    name: String,
+    predicate_exprs: Vec<Box<dyn Expr>>,
+}
+
+impl PathStepExpr {
+    pub fn parse(i: &str) -> IResult<&str, Box<dyn Expr>> {
+        let (i, name) = preceded(
+            parse_space,
+            parse_identifier,
+        )(i)?;
+
+        let (i, predicate_exprs) = PathStepExpr::parse_predicates(i)?;
+
+        let name = name.to_string();
+        Ok((i, Box::new(PathStepExpr { name, predicate_exprs })))
+    }
+
+    fn parse_predicates(i: &str) -> IResult<&str, Vec<Box<dyn Expr>>> {
         let mut predicate_exprs: Vec<Box<dyn Expr>> = Vec::new();
         let mut next_i = i;
         loop {
@@ -289,19 +332,12 @@ impl PathRootExpr {
             predicate_exprs.push(predicate_expr);
             next_i = i
         };
-        if 0 == predicate_exprs.len() {
-            Ok((next_i, expr))
-        } else {
-            Ok((next_i, Box::new(PathRootExpr { expr, predicate_exprs })))
-        }
+        Ok((next_i, predicate_exprs))
     }
-}
 
-impl Expr for PathRootExpr {
-    fn evaluate(&self, ctx: &EvaluationContext) -> Result<Value, Error> {
-        let value = self.expr.evaluate(ctx)?;
+    fn evaluate_predicates(ctx: &EvaluationContext, predicate_exprs: &Vec<Box<dyn Expr>>, value: Value) -> Result<Value, Error> {
         let mut next_value = value;
-        for predicate_expr in &self.predicate_exprs {
+        for predicate_expr in predicate_exprs {
             let value = next_value;
             let mut values = Vec::new();
             for context_value in &value {
@@ -319,34 +355,11 @@ impl Expr for PathRootExpr {
     }
 }
 
-impl PartialEq for PathRootExpr {
-    fn eq(&self, expr: &Self) -> bool {
-        *self.expr == *expr.expr && self.predicate_exprs == expr.predicate_exprs
-    }
-}
-
-#[derive(Debug, PartialEq)]
-pub struct PathStepExpr {
-    name: String,
-}
-
-impl PathStepExpr {
-    pub fn parse(i: &str) -> IResult<&str, Box<dyn Expr>> {
-        println!("start parse path step: {:?}", i);
-        let (i, name) = preceded(
-            parse_space,
-            parse_identifier,
-        )(i)?;
-        println!("end parse path step: {:?}", name);
-        let name = name.to_string();
-        Ok((i, Box::new(PathStepExpr { name })))
-    }
-}
-
 impl Expr for PathStepExpr {
     fn evaluate(&self, ctx: &EvaluationContext) -> Result<Value, Error> {
         let context_value = ctx.get_context_value();
-        Ok(Value::join_path(context_value, self.name.clone()))
+        let value = Value::join_path(context_value, self.name.clone());
+        Self::evaluate_predicates(ctx, &self.predicate_exprs, value)
     }
 }
 
