@@ -136,7 +136,6 @@ impl<'a> EvaluationContext <'a> {
 #[derive(Debug, Eq, PartialEq)]
 pub enum Error {
     FunctionNotFound(String),
-    CouldntGetCurrentDir(io::ErrorKind, String),
     CouldntReadDir(io::ErrorKind, String),
 }
 
@@ -216,8 +215,8 @@ impl PathExpr {
             Ok(r) => r,
             Err(Err::Error(_)) => {
                 let (i, root_expr) = PathRootExpr::parse(i)?;
-                match preceded(parse_space, tag(path::MAIN_SEPARATOR_STR))(i) {
-                    Ok(_) => (),
+                let i = match preceded(parse_space, tag(path::MAIN_SEPARATOR_STR))(i) {
+                    Ok((i, _)) => i,
                     Err(Err::Error(_)) => return Ok((i, root_expr)),
                     Err(e) => return Err(e),
                 };
@@ -265,6 +264,7 @@ impl PathRootExpr {
                 LiteralString::parse,
                 LiteralNumber::parse,
                 FunctionCall::parse,
+                PathStepExpr::parse,
         ))(i)?;
 
         let (i, predicate_exprs) = PathStepExpr::parse_predicates(i)?;
@@ -301,7 +301,7 @@ impl PathStepExpr {
         let (i, step) = preceded(
             parse_space,
             alt((
-                    |i| parse_identifier(i).map(|(i, name)| (i, PathStep::Name(name.to_string()))),
+                    |i| alt((parse_identifier, tag(".."), tag(".")))(i).map(|(i, name)| (i, PathStep::Name(name.to_string()))),
                     value(PathStep::Regex(Regex::new("^.*$").unwrap()), tag("*")),
             ))
         )(i)?;

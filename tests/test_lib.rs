@@ -68,8 +68,10 @@ fn test_union_expression() {
 #[test]
 fn test_parse() {
     let result_map = [
+        ("foo/bar/baz", Value::from([PathBuf::from("foo/bar/baz")])),
         ("/", Value::from([PathBuf::from("/")])),
         ("/*[name() = 'tmp']", Value::from([PathBuf::from("/tmp")])),
+        ("/tmp/../*[name() = 'tmp']", Value::from([PathBuf::from("/tmp/../tmp")])),
         ("/tmp", Value::from([PathBuf::from("/tmp")])),
         ("/foo/bar", Value::from([PathBuf::from("/foo/bar")])),
         ("/foo/bar[1 = 1]", Value::from([PathBuf::from("/").join("foo").join("bar")])),
@@ -105,7 +107,6 @@ fn test_parse() {
 
     let error_map = [
         ("-30A", "A"),
-        ("string(unknown_identifier)", "unknown_identifier)"),
         ("1 == 1", "== 1"),
     ];
 

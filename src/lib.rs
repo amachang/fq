@@ -5,9 +5,9 @@ mod primitive;
 mod value;
 mod expr;
 
-use std::env::current_dir;
-
+use std::path::PathBuf;
 use parse_util::parse_eof;
+
 pub use primitive::{
     Number,
     RealNumber,
@@ -50,11 +50,7 @@ pub fn parse(i: &str) -> Result<Box<dyn Expr>, nom::Err<nom::error::Error<&str>>
 }
 
 pub fn evaluate(expr: &dyn Expr) -> Result<Value, Error> {
-    let current_dir = match current_dir() {
-        Ok(dir) => dir,
-        Err(err) => return Err(Error::CouldntGetCurrentDir(err.kind(), err.to_string())),
-    };
-    let context_value = Value::from(current_dir);
+    let context_value = Value::from([PathBuf::from("")]);
     let ctx = EvaluationContext::new(&context_value);
     expr.evaluate(&ctx)
 }
