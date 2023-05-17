@@ -32,7 +32,10 @@ use nom::{
         tag,
         take_until,
     },
-    character::complete::satisfy,
+    character::complete::{
+        alphanumeric1,
+        satisfy,
+    },
     number::complete::float,
     sequence::{
         preceded,
@@ -43,6 +46,7 @@ use nom::{
         recognize,
         value,
     },
+    multi::many1_count,
     Err,
     error::{
         ParseError,
@@ -176,6 +180,21 @@ pub fn parse_expr_list<'a>(delimiter: &'static str, i: &'a str, parse: fn(i: &st
     Ok((next_i, exprs))
 }
 
+pub fn parse_enclosed_expr<'a>(open_bracket: &'static str, close_bracket: &'static str, i: &'a str, parse: fn(i: &str) -> IResult<&str, Box<dyn Expr>>) -> IResult<&'a str, Box<dyn Expr>> {
+    let (i, _) = preceded(parse_space, tag(open_bracket))(i)?;
+    let (i, expr) = match parse(i) {
+        Ok(r) => r,
+        Err(Err::Error(e)) => return Err(Err::Failure(e)),
+        Err(e) => return Err(e),
+    };
+    let (i, _) = match preceded(parse_space, tag(close_bracket))(i) {
+        Ok(r) => r,
+        Err(Err::Error(e)) => return Err(Err::Failure(e)),
+        Err(e) => return Err(e),
+    };
+    Ok((i, expr))
+}
+
 #[derive(Debug, PartialEq)]
 pub struct UnionExpr {
     exprs: Vec<Box<dyn Expr>>,
@@ -261,8 +280,8 @@ pub struct PathRootExpr {
 impl PathRootExpr {
     pub fn parse(i: &str) -> IResult<&str, Box<dyn Expr>> {
         let (i, expr) = alt((
+                |i| parse_enclosed_expr("(", ")", i, UnionExpr::parse),
                 LiteralString::parse,
-                LiteralNumber::parse,
                 FunctionCall::parse,
                 PathStepExpr::parse,
         ))(i)?;
@@ -301,7 +320,7 @@ impl PathStepExpr {
         let (i, step) = preceded(
             parse_space,
             alt((
-                    |i| alt((parse_identifier, tag(".."), tag(".")))(i).map(|(i, name)| (i, PathStep::Name(name.to_string()))),
+                    Self::parse_simple_name,
                     value(PathStep::Regex(Regex::new("^.*$").unwrap()), tag("*")),
             ))
         )(i)?;
@@ -311,24 +330,26 @@ impl PathStepExpr {
         Ok((i, Box::new(PathStepExpr { step, predicate_exprs })))
     }
 
+    fn parse_simple_name(i: &str) -> IResult<&str, PathStep> {
+        let (i, name) = recognize(
+            many1_count(alt((
+                        alphanumeric1,
+                        tag("_"),
+                        tag("-"),
+                        tag("."),
+            )))
+        )(i)?;
+        Ok((i, PathStep::Name(name.to_string())))
+    }
+
     fn parse_predicates(i: &str) -> IResult<&str, Vec<Box<dyn Expr>>> {
         let mut predicate_exprs: Vec<Box<dyn Expr>> = Vec::new();
         let mut next_i = i;
         loop {
             let i = next_i;
-            let (i, _) = match preceded(parse_space, tag("["))(i) {
+            let (i, predicate_expr) = match parse_enclosed_expr("[", "]", i, UnionExpr::parse) {
                 Ok(r) => r,
                 Err(Err::Error(_)) => break,
-                Err(e) => return Err(e),
-            };
-            let (i, predicate_expr) = match parse(i) {
-                Ok(r) => r,
-                Err(Err::Error(e)) => return Err(Err::Failure(e)),
-                Err(e) => return Err(e),
-            };
-            let (i, _) = match preceded(parse_space, tag("]"))(i) {
-                Ok(r) => r,
-                Err(Err::Error(e)) => return Err(Err::Failure(e)),
                 Err(e) => return Err(e),
             };
             predicate_exprs.push(predicate_expr);
@@ -616,7 +637,7 @@ impl BinaryExpr {
         let mut current_i = i;
         let (i, expr) = loop {
             let i = current_i;
-            let (before_op_i, new_expr) = match UnaryExpr::parse(i) {
+            let (before_op_i, new_expr) = match PathExpr::parse(i) {
                 Ok(r) => r,
                 Err(Err::Error(err)) => {
                     match stack.pop() {

@@ -156,23 +156,25 @@ impl Into<Number> for &Value {
         match self {
             Value::Number(number) => *number,
             Value::Boolean(boolean) => if *boolean { Number::from(1) } else { Number::from(0) },
-            Value::String(string) => {
+            Value::String(string) => match string.parse::<f64>() {
+                Ok(number) => Number::from(number),
+                Err(_) => Number::from(f64::NAN),
+            },
+            Value::Path(path) => {
+                let string: String = path.to_string_lossy().into_owned();
                 match string.parse::<f64>() {
                     Ok(number) => Number::from(number),
                     Err(_) => Number::from(f64::NAN),
                 }
             },
-            Value::Path(_) => Number::from(f64::NAN),
-            Value::Set(set) => {
-                match set.iter().cloned().next() {
-                    Some(real_value) => {
-                        let value: Value = real_value.into();
-                        let number: Number = value.into();
-                        number
-                    },
-                    None => Number::from(f64::NAN),
-                }
-            }
+            Value::Set(set) => match set.iter().cloned().next() {
+                Some(real_value) => {
+                    let value: Value = real_value.into();
+                    let number: Number = value.into();
+                    number
+                },
+                None => Number::from(f64::NAN),
+            },
         }
     }
 }
