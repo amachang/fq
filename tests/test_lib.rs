@@ -42,7 +42,7 @@ fn test_binary_expression() {
     let source_evaluated_value_remaining_input_map = [
         ("1 + 2", Value::from(3), ""),
         ("4 div 2 errorerror", Value::from(2), " errorerror"),
-        ("1 == 1", Value::from(PathBuf::from("1")), " == 1"),
+        ("1 == 1", Value::from([PathBuf::from("1")]), " == 1"),
     ];
     for (source, evaluated_value, remaining_input) in source_evaluated_value_remaining_input_map {
         let (i, expr) = BinaryExpr::parse(source).unwrap();
@@ -56,7 +56,7 @@ fn test_union_expression() {
     let source_evaluated_value_remaining_input_map = [
         ("1 | 2", Value::from([PathBuf::from("1"), PathBuf::from("2")]), ""),
         ("'1' | '2' | '3' errorerror", Value::from(["1", "2", "3"]), " errorerror"),
-        ("1 == 1", Value::from(PathBuf::from("1")), " == 1"),
+        ("1 == 1", Value::from([PathBuf::from("1")]), " == 1"),
     ];
     for (source, evaluated_value, remaining_input) in source_evaluated_value_remaining_input_map {
         let (i, expr) = UnionExpr::parse(source).unwrap();
@@ -82,8 +82,8 @@ fn test_parse() {
         ("path('/tmp')[1 = 2]", Value::from(Vec::new())),
         ("string(123)", Value::from("123")),
         ("string(1 = 1)", Value::from("true")),
-        ("30", Value::from(PathBuf::from("30"))),
-        ("1e10", Value::from(PathBuf::from("1e10"))),
+        ("30", Value::from([PathBuf::from("30")])),
+        ("1e10", Value::from([PathBuf::from("1e10")])),
         ("1 + 2 * -3", Value::from(-5)),
         ("(1 + 2) * -3", Value::from(-9)),
         ("4 div 3 > 2 % 1", Value::from(true)),
@@ -92,7 +92,7 @@ fn test_parse() {
         ("1 | 2 | 3", Value::from([PathBuf::from("1"), PathBuf::from("2"), PathBuf::from("3")])),
         ("1.1e3 | 2.2e3 | 3.3e3", Value::from([PathBuf::from("1.1e3"), PathBuf::from("2.2e3"), PathBuf::from("3.3e3")])),
         ("'1' | '2' | '3'", Value::from(["1", "2", "3"])),
-        ("-30", Value::from(PathBuf::from("-30"))),
+        ("-30", Value::from([PathBuf::from("-30")])),
     ];
 
     for (source, result_value) in result_map {

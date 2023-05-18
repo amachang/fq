@@ -21,7 +21,9 @@ use std::{
     io,
     fs::read_dir,
     path,
-    path::PathBuf,
+    path::{
+        PathBuf,
+    },
 };
 
 use regex::Regex;
@@ -44,7 +46,6 @@ use nom::{
     branch::alt,
     combinator::{
         recognize,
-        value,
     },
     multi::many1_count,
     Err,
@@ -309,37 +310,25 @@ impl PartialEq for PathRootExpr {
     }
 }
 
-#[derive(Debug, PartialEq)]
+#[derive(Debug)]
 pub struct PathStepExpr {
-    step: PathStep,
+    expr: Box<dyn Expr>,
     predicate_exprs: Vec<Box<dyn Expr>>,
 }
 
 impl PathStepExpr {
     pub fn parse(i: &str) -> IResult<&str, Box<dyn Expr>> {
-        let (i, step) = preceded(
+        let (i, expr) = preceded(
             parse_space,
             alt((
-                    Self::parse_simple_name,
-                    value(PathStep::Regex(Regex::new("^.*$").unwrap()), tag("*")),
+                    NamePathStepExpr::parse,
+                    PatternPathStepExpr::parse,
             ))
         )(i)?;
 
         let (i, predicate_exprs) = PathStepExpr::parse_predicates(i)?;
 
-        Ok((i, Box::new(PathStepExpr { step, predicate_exprs })))
-    }
-
-    fn parse_simple_name(i: &str) -> IResult<&str, PathStep> {
-        let (i, name) = recognize(
-            many1_count(alt((
-                        alphanumeric1,
-                        tag("_"),
-                        tag("-"),
-                        tag("."),
-            )))
-        )(i)?;
-        Ok((i, PathStep::Name(name.to_string())))
+        Ok((i, Box::new(PathStepExpr { expr, predicate_exprs })))
     }
 
     fn parse_predicates(i: &str) -> IResult<&str, Vec<Box<dyn Expr>>> {
@@ -381,48 +370,89 @@ impl PathStepExpr {
 impl Expr for PathStepExpr {
     fn evaluate(&self, ctx: &EvaluationContext) -> Result<Value, Error> {
         let context_value = ctx.get_context_value();
-        let value = match &self.step {
-            PathStep::Name(name) => Value::join_path(context_value, name.clone()),
-            PathStep::Regex(re) => {
-                let path: PathBuf = context_value.into();
-                let mut values: Vec<Value> = Vec::new();
-                if path.is_dir() {
-                    let iter = match read_dir(path) {
-                        Ok(iter) => iter,
-                        Err(err) => return Err(Error::CouldntReadDir(err.kind(), err.to_string())),
-                    };
-                    for entry in iter {
-                        let entry = match entry {
-                            Ok(entry) => entry,
-                            Err(err) => return Err(Error::CouldntReadDir(err.kind(), err.to_string())),
-                        };
-                        let file_name = entry.file_name().to_string_lossy().to_string(); // TODO
-
-                        if re.is_match(&file_name) {
-                            values.push(Value::join_path(context_value, file_name));
-                        };
-                    };
-                };
-                Value::from(values)
-            },
+        let mut values = Vec::new();
+        let expr_values = self.expr.evaluate(ctx)?;
+        for expr_value in &expr_values {
+            let value = Value::join_path(context_value, &expr_value);
+            values.push(value);
         };
+        let value = Value::from(values);
         Self::evaluate_predicates(ctx, &self.predicate_exprs, value)
     }
 }
 
-#[derive(Debug, Clone)]
-enum PathStep {
-    Name(String),
-    Regex(Regex),
+impl PartialEq for PathStepExpr {
+    fn eq(&self, expr: &Self) -> bool {
+        *self.expr == *expr.expr && self.predicate_exprs == expr.predicate_exprs
+    }
 }
 
-impl PartialEq for PathStep {
-    fn eq(&self, lv: &PathStep) -> bool {
-        match (self, lv) {
-            (PathStep::Name(r_str), PathStep::Name(l_str)) => r_str == l_str,
-            (PathStep::Regex(r_re), PathStep::Regex(l_re)) => r_re.to_string() == l_re.to_string(),
-            _ => false,
-        }
+#[derive(Debug, PartialEq)]
+pub struct NamePathStepExpr {
+    name: String
+}
+
+impl NamePathStepExpr {
+    fn parse(i: &str) -> IResult<&str, Box<dyn Expr>> {
+        let (i, name) = recognize(
+            many1_count(alt((
+                        alphanumeric1,
+                        tag("_"),
+                        tag("-"),
+                        tag("."),
+            )))
+        )(i)?;
+        let name = name.to_string();
+        Ok((i, Box::new(NamePathStepExpr { name })))
+    }
+}
+
+impl Expr for NamePathStepExpr {
+    fn evaluate(&self, _: &EvaluationContext) -> Result<Value, Error> {
+        Ok(Value::from(PathBuf::from(&self.name)))
+    }
+}
+
+#[derive(Debug)]
+pub struct PatternPathStepExpr {
+    pattern: Regex,
+}
+
+impl PatternPathStepExpr {
+    fn parse(i: &str) -> IResult<&str, Box<dyn Expr>> {
+        let (i, _) = tag("*")(i)?;
+        let pattern = Regex::new("^.*$").unwrap();
+        Ok((i, Box::new(PatternPathStepExpr { pattern })))
+    }
+}
+
+impl Expr for PatternPathStepExpr {
+    fn evaluate(&self, ctx: &EvaluationContext) -> Result<Value, Error> {
+        let context_dir: PathBuf = ctx.context_value.into();
+        let mut values: Vec<Value> = Vec::new();
+        if context_dir.is_dir() {
+            let iter = match read_dir(context_dir) {
+                Ok(iter) => iter,
+                Err(err) => return Err(Error::CouldntReadDir(err.kind(), err.to_string())),
+            };
+            for entry in iter {
+                let entry = match entry {
+                    Ok(entry) => entry,
+                    Err(err) => return Err(Error::CouldntReadDir(err.kind(), err.to_string())),
+                };
+                let file_name = entry.file_name();
+                if self.pattern.is_match(&file_name.to_string_lossy().into_owned()) {
+                    values.push(Value::from(PathBuf::from(file_name)));
+                };
+            };
+        };
+        Ok(Value::from(values))
+    }
+}
+
+impl PartialEq for PatternPathStepExpr {
+    fn eq(&self, expr: &Self) -> bool {
+        self.pattern.to_string() == expr.pattern.to_string()
     }
 }
 

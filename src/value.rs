@@ -104,9 +104,10 @@ impl Value {
         }
     }
 
-    pub fn join_path(value: &Value, path_component_str: String) -> Value {
-        let path: PathBuf = value.into();
-        Value::from(path.join(path_component_str))
+    pub fn join_path(dir_path_value: &Value, path_component_value: &Value) -> Value {
+        let dir_path: PathBuf = dir_path_value.into();
+        let path_component: PathBuf = path_component_value.into();
+        Value::from(dir_path.join(path_component))
     }
 }
 
