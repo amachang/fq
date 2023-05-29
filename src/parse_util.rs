@@ -1,5 +1,3 @@
-#![deny(warnings, clippy::all, clippy::pedantic)]
-
 use nom::{
     IResult,
     bytes::complete::{

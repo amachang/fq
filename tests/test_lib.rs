@@ -8,6 +8,8 @@ use fq::{
     Number,
     Value,
     BinaryOperator,
+    PathExpr,
+    PathRootExpr,
     BinaryExpr,
     UnionExpr,
 };
@@ -35,6 +37,30 @@ fn test_binary_operator() {
 
     let n = Value::from(1);
     assert_eq!(BinaryOperator::Equal.evaluate(&n, &n), Value::from(true));
+}
+
+#[test]
+fn test_path_expression() {
+    let source_evaluated_value_remaining_input_map = [
+        ("1", Value::from([PathBuf::from("1")]), ""),
+    ];
+    for (source, evaluated_value, remaining_input) in source_evaluated_value_remaining_input_map {
+        let (i, expr) = PathExpr::parse(source).unwrap();
+        assert_eq!(evaluate(&*expr).unwrap(), evaluated_value);
+        assert_eq!(i, remaining_input);
+    }
+}
+
+#[test]
+fn test_path_root_expression() {
+    let source_evaluated_value_remaining_input_map = [
+        ("1", Value::from([PathBuf::from("1")]), ""),
+    ];
+    for (source, evaluated_value, remaining_input) in source_evaluated_value_remaining_input_map {
+        let (i, expr) = PathRootExpr::parse(source).unwrap();
+        assert_eq!(evaluate(&*expr).unwrap(), evaluated_value);
+        assert_eq!(i, remaining_input);
+    }
 }
 
 #[test]
@@ -68,6 +94,8 @@ fn test_union_expression() {
 #[test]
 fn test_parse() {
     let result_map = [
+        ("/t*p", Value::from([PathBuf::from("/tmp")])),
+        // ("foo{bar,baz}/{aaa,bbb}", Value::from([PathBuf::from("foobar/aaa"), PathBuf::from("foobar/bbb"), PathBuf::from("foobaz/aaa"), PathBuf::from("foobaz/bbb")])),
         ("foo/bar/baz", Value::from([PathBuf::from("foo/bar/baz")])),
         ("001/002/003", Value::from([PathBuf::from("001/002/003")])),
         ("(001 + 002)/003/004", Value::from([PathBuf::from("3/003/004")])),

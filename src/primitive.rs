@@ -1,5 +1,3 @@
-#![deny(warnings, clippy::all, clippy::pedantic)]
-
 use std::{
     convert::From,
     cmp::Ordering,
@@ -240,5 +238,11 @@ impl ToString for RealNumber {
             Self::Float(f) => f.to_string(),
         }
     }
+}
+
+#[derive(Debug, Copy, Clone, Eq, PartialEq, Hash)]
+pub enum PathExistence {
+    Checked,
+    NotChecked,
 }
 

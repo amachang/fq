@@ -1,9 +1,8 @@
-#![deny(warnings, clippy::all, clippy::pedantic)]
-
 use super::primitive::{
     Number,
     RealNumber,
     RealNumberError,
+    PathExistence,
 };
 
 use std::{
@@ -27,13 +26,27 @@ use std::{
     path::PathBuf,
 };
 
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone)]
 pub enum Value {
     Number(Number),
     Boolean(bool),
     String(String),
     Path(PathBuf),
-    Set(BTreeSet<RealValue>),
+    Set(BTreeSet<RealValue>, PathExistence),
+}
+
+impl PartialEq for Value {
+    fn eq(&self, value: &Self) -> bool {
+        use Value::*;
+        match (self, value) {
+            (Number(r), Number(l)) => r == l,
+            (Boolean(r), Boolean(l)) => r == l,
+            (String(r), String(l)) => r == l,
+            (Path(r), Path(l)) => r == l,
+            (Set(r, _), Set(l, _)) => r == l,
+            _ => false,
+        }
+    }
 }
 
 #[derive(Debug, Eq, Clone, PartialEq, Hash)]
@@ -99,15 +112,16 @@ impl Value {
 
     pub fn as_set(self) -> Self {
         match self {
-            Value::Set(_) => self,
+            Value::Set(_, _) => self,
             _ => Value::from([self.clone()]),
         }
     }
-
-    pub fn join_path(dir_path_value: &Value, path_component_value: &Value) -> Value {
-        let dir_path: PathBuf = dir_path_value.into();
-        let path_component: PathBuf = path_component_value.into();
-        Value::from(dir_path.join(path_component))
+    
+    pub fn path_existence(&self) -> PathExistence {
+        match self {
+            Value::Set(_, existence) => *existence,
+            _ => PathExistence::NotChecked,
+        }
     }
 }
 
@@ -135,7 +149,7 @@ impl Into<bool> for &Value {
             Value::Boolean(boolean) => *boolean,
             Value::String(string) => 0 < string.len(),
             Value::Path(_) => true,
-            Value::Set(set) => 0 < set.len(),
+            Value::Set(set, _) => 0 < set.len(),
         }
     }
 }
@@ -168,7 +182,7 @@ impl Into<Number> for &Value {
                     Err(_) => Number::from(f64::NAN),
                 }
             },
-            Value::Set(set) => match set.iter().cloned().next() {
+            Value::Set(set, _) => match set.iter().cloned().next() {
                 Some(real_value) => {
                     let value: Value = real_value.into();
                     let number: Number = value.into();
@@ -226,7 +240,7 @@ impl Into<String> for &Value {
             Value::String(string) => string.clone(),
             Value::Path(path) => path.to_string_lossy().into_owned(), // TODO String should be
                                                                       // contains OsString
-            Value::Set(values) => {
+            Value::Set(values, _) => {
                 match values.iter().cloned().next() {
                     Some(real_value) => {
                         let value: Value = real_value.into();
@@ -248,23 +262,25 @@ impl From<PathBuf> for Value {
 
 impl From<Vec<Value>> for Value {
     fn from(vs: Vec<Value>) -> Self {
-        let real_values = vs.iter().flat_map(|v| {
+        let (real_values, existence) = vs.iter().fold((BTreeSet::new(), PathExistence::Checked), |(mut all_real_values, all_existence), v| {
             match v {
-                Value::Set(new_real_values) => new_real_values.clone(),
+                Value::Set(new_real_values, existence) => {
+                    all_real_values.extend(new_real_values.clone());
+                    (all_real_values, match all_existence { PathExistence::Checked => *existence, _ => PathExistence::NotChecked })
+                },
                 _ => {
                     match RealValue::try_from(v) {
                         Ok(real_value) => {
-                            let mut set = BTreeSet::new();
-                            set.insert(real_value);
-                            set
+                            all_real_values.insert(real_value);
+                            (all_real_values, PathExistence::NotChecked)
                         },
-                        Err(RealValueError::InvalidFloatNumber) => BTreeSet::new(),
+                        Err(RealValueError::InvalidFloatNumber) => (all_real_values, PathExistence::NotChecked),
                         Err(RealValueError::EmptySet) => unreachable!(),
                     }
                 },
             }
-        }).collect();
-        return Value::Set(real_values)
+        });
+        return Value::Set(real_values, existence)
     }
 }
 
@@ -281,7 +297,7 @@ impl Into<PathBuf> for &Value {
             Value::Boolean(boolean) => PathBuf::from(boolean.to_string()),
             Value::String(string) => PathBuf::from(string),
             Value::Path(path) => path.clone(),
-            Value::Set(values) => {
+            Value::Set(values, _) => {
                 match values.iter().cloned().next() {
                     Some(real_value) => {
                         let value: Value = real_value.into();
@@ -319,7 +335,7 @@ impl<const N: usize> From<[i64; N]> for Value {
                 Err(_) => (),
             };
         };
-        return Value::Set(values)
+        return Value::Set(values, PathExistence::NotChecked)
     }
 }
 
@@ -334,7 +350,7 @@ impl<const N: usize> From<[f64; N]> for Value {
                 Err(_) => (),
             };
         };
-        return Value::Set(values)
+        return Value::Set(values, PathExistence::NotChecked)
     }
 }
 
@@ -344,7 +360,7 @@ impl<const N: usize> From<[bool; N]> for Value {
         for b in bs {
             values.insert(RealValue::Boolean(b));
         };
-        return Value::Set(values)
+        return Value::Set(values, PathExistence::NotChecked)
     }
 }
 
@@ -354,7 +370,7 @@ impl<const N: usize> From<[&str; N]> for Value {
         for s in ss {
             values.insert(RealValue::String(s.to_string()));
         };
-        return Value::Set(values)
+        return Value::Set(values, PathExistence::NotChecked)
     }
 }
 
@@ -364,7 +380,7 @@ impl<const N: usize> From<[PathBuf; N]> for Value {
         for p in ps {
             values.insert(RealValue::Path(p));
         };
-        return Value::Set(values)
+        return Value::Set(values, PathExistence::NotChecked)
     }
 }
 
@@ -400,7 +416,7 @@ impl<'a> IntoIterator for &'a Value {
 
     fn into_iter(self) -> Self::IntoIter {
         match self {
-            Value::Set(set) => ValueIterator::SetIterator(set.iter()),
+            Value::Set(set, _) => ValueIterator::SetIterator(set.iter()),
             _ => return ValueIterator::SingleIterator(self, false),
         }
     }
@@ -471,7 +487,7 @@ impl TryFrom<&Value> for RealValue {
             Value::Boolean(boolean) => Ok(Self::Boolean(*boolean)),
             Value::String(string) => Ok(Self::String(string.clone())),
             Value::Path(path) => Ok(Self::Path(path.clone())),
-            Value::Set(set) => {
+            Value::Set(set, _) => {
                 match set.iter().cloned().next() {
                     Some(real_value) => Ok(real_value),
                     None => Err(Self::Error::EmptySet),

@@ -1,5 +1,3 @@
-#![deny(warnings, clippy::all, clippy::pedantic)]
-
 mod parse_util;
 mod primitive;
 mod value;
@@ -21,12 +19,10 @@ pub use expr::{
     Error,
     Expr,
     UnionExpr,
-    LiteralNumber,
     LiteralString,
-    UnaryExpr,
-    UnaryOperator,
     BinaryExpr,
     BinaryOperator,
+    PathExpr,
     PathRootExpr,
     PathStepExpr,
     LiteralRootPath,

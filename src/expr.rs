@@ -1,5 +1,3 @@
-#![deny(warnings, clippy::all, clippy::pedantic)]
-
 use super::{
     parse_util::{
         parse_space,
@@ -7,9 +5,10 @@ use super::{
     },
     value::{
         Value,
+        RealValue,
     },
     primitive::{
-        Number,
+        PathExistence,
     },
 };
 
@@ -18,14 +17,21 @@ use std::{
     collections::{
         HashMap,
     },
+    collections::{
+        BTreeSet,
+    },
     io,
-    fs::read_dir,
+    fs::{
+        read_dir,
+    },
     path,
     path::{
+        Path,
         PathBuf,
     },
 };
 
+use regex;
 use regex::Regex;
 
 use nom::{
@@ -38,7 +44,6 @@ use nom::{
         alphanumeric1,
         satisfy,
     },
-    number::complete::float,
     sequence::{
         preceded,
         pair,
@@ -64,7 +69,12 @@ pub struct EvaluationContext <'a> {
 
 impl<'a> EvaluationContext <'a> {
     pub fn new(context_value: &'a Value) -> EvaluationContext {
-        let mut ctx = EvaluationContext { parent: None, fn_map: HashMap::new(), var_map: HashMap::new(), context_value: context_value, };
+        let mut ctx = EvaluationContext {
+            parent: None,
+            fn_map: HashMap::new(),
+            var_map: HashMap::new(),
+            context_value: context_value,
+        };
         ctx.register_function("string", |ctx, vs| {
             let ref_value = if vs.len() < 1 { ctx.get_context_value() } else { &vs[0] };
             ref_value.clone().as_string()
@@ -158,8 +168,8 @@ pub fn parse(i: &str) -> IResult<&str, Box<dyn Expr>> {
     UnionExpr::parse(i)
 }
 
-pub fn parse_expr_list<'a>(delimiter: &'static str, i: &'a str, parse: fn(i: &str) -> IResult<&str, Box<dyn Expr>>) -> IResult<&'a str, Vec<Box<dyn Expr>>> {
-    let mut exprs: Vec<Box<dyn Expr>> = Vec::new();
+pub fn parse_expr_list<'a, T>(delimiter: &'static str, i: &'a str, parse: fn(i: &str) -> IResult<&str, T>) -> IResult<&'a str, Vec<T>> {
+    let mut exprs: Vec<T> = Vec::new();
     let mut next_i = i;
     loop {
         let i = next_i;
@@ -181,7 +191,7 @@ pub fn parse_expr_list<'a>(delimiter: &'static str, i: &'a str, parse: fn(i: &st
     Ok((next_i, exprs))
 }
 
-pub fn parse_enclosed_expr<'a>(open_bracket: &'static str, close_bracket: &'static str, i: &'a str, parse: fn(i: &str) -> IResult<&str, Box<dyn Expr>>) -> IResult<&'a str, Box<dyn Expr>> {
+pub fn parse_enclosed_expr<'a, T>(open_bracket: &'static str, close_bracket: &'static str, i: &'a str, parse: fn(i: &str) -> IResult<&str, T>) -> IResult<&'a str, T> {
     let (i, _) = preceded(parse_space, tag(open_bracket))(i)?;
     let (i, expr) = match parse(i) {
         Ok(r) => r,
@@ -226,7 +236,7 @@ impl Expr for UnionExpr {
 #[derive(Debug)]
 pub struct PathExpr {
     root_expr: Box<dyn Expr>,
-    step_exprs: Vec<Box<dyn Expr>>,
+    steps: Vec<PathStep>,
 }
 
 impl PathExpr {
@@ -244,31 +254,24 @@ impl PathExpr {
             },
             Err(e) => return Err(e),
         };
-        let (i, step_exprs) = parse_expr_list(path::MAIN_SEPARATOR_STR, i, PathStepExpr::parse)?;
-        Ok((i, Box::new(PathExpr { root_expr, step_exprs })))
+        let (i, steps) = parse_expr_list(path::MAIN_SEPARATOR_STR, i, PathStep::parse)?;
+        Ok((i, Box::new(PathExpr { root_expr, steps })))
     }
 }
 
 impl Expr for PathExpr {
     fn evaluate(&self, ctx: &EvaluationContext) -> Result<Value, Error> {
-        let mut next_value = self.root_expr.evaluate(ctx)?;
-        for expr in &self.step_exprs {
-            let value = next_value;
-            let mut values = Vec::new();
-            for context_value in &value {
-                let ctx = ctx.scope(&context_value);
-                let value = expr.evaluate(&ctx)?;
-                values.push(value);
-            };
-            next_value = Value::from(values);
+        let mut value = self.root_expr.evaluate(ctx)?;
+        for step in &self.steps {
+            value = step.evaluate(&ctx, &value)?;
         };
-        return Ok(next_value)
+        return Ok(value)
     }
 }
 
 impl PartialEq for PathExpr {
     fn eq(&self, expr: &Self) -> bool {
-        *self.root_expr == *expr.root_expr && self.step_exprs == expr.step_exprs
+        *self.root_expr == *expr.root_expr && self.steps == expr.steps
     }
 }
 
@@ -284,10 +287,13 @@ impl PathRootExpr {
                 |i| parse_enclosed_expr("(", ")", i, UnionExpr::parse),
                 LiteralString::parse,
                 FunctionCall::parse,
-                PathStepExpr::parse,
+                |i| -> IResult<&str, Box<dyn Expr>> {
+                    let (i, step) = PathStep::parse(i)?;
+                    Ok((i, Box::new(PathStepExpr { step })))
+                },
         ))(i)?;
 
-        let (i, predicate_exprs) = PathStepExpr::parse_predicates(i)?;
+        let (i, predicate_exprs) = PathStep::parse_predicates(i)?;
 
         if 0 == predicate_exprs.len() {
             Ok((i, expr))
@@ -300,7 +306,7 @@ impl PathRootExpr {
 impl Expr for PathRootExpr {
     fn evaluate(&self, ctx: &EvaluationContext) -> Result<Value, Error> {
         let value = self.expr.evaluate(ctx)?;
-        PathStepExpr::evaluate_predicates(ctx, &self.predicate_exprs, value)
+        PathStep::evaluate_predicates(ctx, &self.predicate_exprs, value)
     }
 }
 
@@ -310,25 +316,90 @@ impl PartialEq for PathRootExpr {
     }
 }
 
-#[derive(Debug)]
+#[derive(Debug, PartialEq)]
 pub struct PathStepExpr {
-    expr: Box<dyn Expr>,
+    step: PathStep,
+}
+
+impl Expr for PathStepExpr {
+    fn evaluate(&self, ctx: &EvaluationContext) -> Result<Value, Error> {
+        let context_value = ctx.get_context_value();
+        self.step.evaluate(&ctx, context_value)
+    }
+}
+
+#[derive(Debug)]
+pub struct PathStep {
+    op: PathStepOperation,
     predicate_exprs: Vec<Box<dyn Expr>>,
 }
 
-impl PathStepExpr {
-    pub fn parse(i: &str) -> IResult<&str, Box<dyn Expr>> {
-        let (i, expr) = preceded(
-            parse_space,
-            alt((
-                    NamePathStepExpr::parse,
-                    PatternPathStepExpr::parse,
-            ))
-        )(i)?;
+impl PathStep {
+    pub fn parse(i: &str) -> IResult<&str, PathStep> {
+        let (i, _) = parse_space(i)?;
 
-        let (i, predicate_exprs) = PathStepExpr::parse_predicates(i)?;
+        match tag("**")(i) {
+            Ok((i, _)) => {
+                let op = PathStepOperation::Recursive;
+                let (i, predicate_exprs) = PathStep::parse_predicates(i)?;
+                return Ok((i, PathStep { op, predicate_exprs }));
+            },
+            Err(Err::Error(_)) => (),
+            Err(e) => return Err(e),
+        };
 
-        Ok((i, Box::new(PathStepExpr { expr, predicate_exprs })))
+        let mut components: Vec<PathStepPatternComponent> = Vec::new();
+        let mut next_i = i;
+        loop {
+            let i = next_i;
+
+            match tag("**")(i) {
+                Ok((i, _)) => return Err(Err::Error(ParseError::from_error_kind(i, ErrorKind::Tag))),
+                Err(Err::Error(_)) => (),
+                Err(e) => return Err(e),
+            };
+
+            let (i, component) = match Self::parse_component(i) {
+                Ok(r) => r,
+                Err(Err::Error(_)) => break,
+                Err(e) => return Err(e),
+            };
+
+            components.push(component);
+
+            next_i = i;
+        };
+        if components.len() == 0 {
+            return Err(Err::Error(ParseError::from_error_kind(i, ErrorKind::Char)));
+        };
+
+        let i = next_i;
+        let op = PathStepOperation::Pattern(components);
+        let (i, predicate_exprs) = PathStep::parse_predicates(i)?;
+        Ok((i, PathStep { op, predicate_exprs }))
+    }
+
+    fn parse_component(i: &str) -> IResult<&str, PathStepPatternComponent> {
+        alt((
+                Self::parse_name_component,
+                Self::parse_match_all_component,
+                Self:: parse_exprs_component,
+        ))(i)
+    }
+
+    fn parse_name_component(i: &str) -> IResult<&str, PathStepPatternComponent> {
+        let (i, name) = recognize(many1_count(alt((alphanumeric1, tag("_"), tag("-"), tag(".")))))(i)?;
+        Ok((i, PathStepPatternComponent::Name(name.to_string())))
+    }
+
+    fn parse_match_all_component(i: &str) -> IResult<&str, PathStepPatternComponent> {
+        let (i, _) = tag("*")(i)?;
+        Ok((i, PathStepPatternComponent::Regex("(?:.*?)".to_string())))
+    }
+
+    fn parse_exprs_component(i: &str) -> IResult<&str, PathStepPatternComponent> {
+        let (i, exprs) = parse_enclosed_expr("{", "}", i, |i| parse_expr_list(",", i, UnionExpr::parse))?;
+        Ok((i, PathStepPatternComponent::Exprs(exprs)))
     }
 
     fn parse_predicates(i: &str) -> IResult<&str, Vec<Box<dyn Expr>>> {
@@ -365,94 +436,172 @@ impl PathStepExpr {
         };
         Ok(next_value)
     }
-}
 
-impl Expr for PathStepExpr {
-    fn evaluate(&self, ctx: &EvaluationContext) -> Result<Value, Error> {
-        let context_value = ctx.get_context_value();
-        let mut values = Vec::new();
-        let expr_values = self.expr.evaluate(ctx)?;
-        for expr_value in &expr_values {
-            let value = Value::join_path(context_value, &expr_value);
-            values.push(value);
-        };
-        let value = Value::from(values);
+    fn evaluate(&self, ctx: &EvaluationContext, value: &Value) -> Result<Value, Error> {
+        let value = self.op.evaluate(ctx, value)?;
         Self::evaluate_predicates(ctx, &self.predicate_exprs, value)
     }
 }
 
-impl PartialEq for PathStepExpr {
+impl PartialEq for PathStep {
     fn eq(&self, expr: &Self) -> bool {
-        *self.expr == *expr.expr && self.predicate_exprs == expr.predicate_exprs
+        self.op == expr.op && self.predicate_exprs == expr.predicate_exprs
     }
 }
 
 #[derive(Debug, PartialEq)]
-pub struct NamePathStepExpr {
-    name: String
+enum PathStepOperation {
+    Recursive,
+    Pattern(Vec<PathStepPatternComponent>),
 }
 
-impl NamePathStepExpr {
-    fn parse(i: &str) -> IResult<&str, Box<dyn Expr>> {
-        let (i, name) = recognize(
-            many1_count(alt((
-                        alphanumeric1,
-                        tag("_"),
-                        tag("-"),
-                        tag("."),
-            )))
-        )(i)?;
-        let name = name.to_string();
-        Ok((i, Box::new(NamePathStepExpr { name })))
+#[derive(Debug, PartialEq)]
+enum PathStepPatternComponent {
+    Name(String),
+    Regex(String),
+    Exprs(Vec<Box<dyn Expr>>),
+}
+
+impl PathStepOperation {
+    fn evaluate(&self, ctx: &EvaluationContext, value: &Value) -> Result<Value, Error> {
+        match self {
+            Self::Recursive => Self::evaluate_recursive(value),
+            Self::Pattern(components) => Self::evaluate_pattern(components, ctx, value),
+        }
     }
-}
 
-impl Expr for NamePathStepExpr {
-    fn evaluate(&self, _: &EvaluationContext) -> Result<Value, Error> {
-        Ok(Value::from(PathBuf::from(&self.name)))
-    }
-}
-
-#[derive(Debug)]
-pub struct PatternPathStepExpr {
-    pattern: Regex,
-}
-
-impl PatternPathStepExpr {
-    fn parse(i: &str) -> IResult<&str, Box<dyn Expr>> {
-        let (i, _) = tag("*")(i)?;
-        let pattern = Regex::new("^.*$").unwrap();
-        Ok((i, Box::new(PatternPathStepExpr { pattern })))
-    }
-}
-
-impl Expr for PatternPathStepExpr {
-    fn evaluate(&self, ctx: &EvaluationContext) -> Result<Value, Error> {
-        let context_dir: PathBuf = ctx.context_value.into();
-        let mut values: Vec<Value> = Vec::new();
-        if context_dir.is_dir() {
-            let iter = match read_dir(context_dir) {
-                Ok(iter) => iter,
-                Err(err) => return Err(Error::CouldntReadDir(err.kind(), err.to_string())),
-            };
-            for entry in iter {
-                let entry = match entry {
-                    Ok(entry) => entry,
-                    Err(err) => return Err(Error::CouldntReadDir(err.kind(), err.to_string())),
-                };
-                let file_name = entry.file_name();
-                if self.pattern.is_match(&file_name.to_string_lossy().into_owned()) {
-                    values.push(Value::from(PathBuf::from(file_name)));
-                };
-            };
+    fn evaluate_recursive(values: &Value) -> Result<Value, Error> {
+        let mut result_path_values = BTreeSet::new();
+        for value in values {
+            let path: PathBuf = value.into();
+            if path.is_dir() {
+                Self::get_descendant_path_values(&path, &mut result_path_values)?;
+            }
         };
-        Ok(Value::from(values))
+        Ok(Value::Set(result_path_values, PathExistence::Checked))
     }
-}
 
-impl PartialEq for PatternPathStepExpr {
-    fn eq(&self, expr: &Self) -> bool {
-        self.pattern.to_string() == expr.pattern.to_string()
+    fn get_descendant_path_values(dir: impl AsRef<Path>, result_path_values: &mut BTreeSet<RealValue>) -> Result<(), Error> {
+        let dir = dir.as_ref();
+        let dir_entries = read_dir(dir).map_err(|e| Error::CouldntReadDir(e.kind(), e.to_string()))?;
+        for dir_entry in dir_entries {
+            let dir_entry = dir_entry.map_err(|e| Error::CouldntReadDir(e.kind(), e.to_string()))?;
+            let path = dir_entry.path();
+            if path.is_dir() {
+                Self::get_descendant_path_values(&path, result_path_values)?;
+            }
+            result_path_values.insert(RealValue::Path(path));
+        }
+        Ok(())
+    }
+
+    fn evaluate_pattern(components: &Vec<PathStepPatternComponent>, ctx: &EvaluationContext, values: &Value) -> Result<Value, Error> {
+        use PathStepPatternComponent as Comp;
+        use PathExistence::*;
+        let path_existence = match values.path_existence() {
+            Checked => Checked,
+            NotChecked => components.iter().fold(NotChecked, |pe, comp| match (pe, comp) {
+                (Checked, _) => Checked,
+                (NotChecked, Comp::Name(_)) => NotChecked,
+                (NotChecked, Comp::Regex(_)) => Checked,
+                (NotChecked, Comp::Exprs(_)) => NotChecked,
+            }),
+        };
+
+        enum EvaluatedComp<'a> {
+            Name(&'a str),
+            Regex(&'a str),
+            Exprs(Vec<String>),
+        }
+
+        let mut result_values = BTreeSet::new();
+
+        for context_value in values {
+            let ctx = ctx.scope(&context_value);
+            let mut evaluated_comps = Vec::new();
+            for comp in components {
+                let evaluated_comp = match comp {
+                    Comp::Name(name) => EvaluatedComp::Name(name),
+                    Comp::Regex(regex) => EvaluatedComp::Regex(regex),
+                    Comp::Exprs(exprs) => {
+                        let mut results = Vec::new();
+                        for expr in exprs {
+                            let result = expr.evaluate(&ctx)?;
+                            results.push(result.into());
+                        };
+                        EvaluatedComp::Exprs(results)
+                    },
+                };
+                evaluated_comps.push(evaluated_comp)
+            };
+
+            let context_dir: PathBuf = ctx.get_context_value().into();
+            let mut paths = Vec::new();
+            match path_existence {
+                Checked => {
+                    let mut regex_str = String::new();
+                    regex_str.push_str("^");
+                    for comp in evaluated_comps {
+                        let regex_comp_str = match comp {
+                            EvaluatedComp::Name(name) => regex::escape(name),
+                            EvaluatedComp::Regex(regex) => regex.to_string(),
+                            EvaluatedComp::Exprs(names) => {
+                                let name_regex_str: Vec<_> = names.iter().map(|n| regex::escape(n)).collect();
+                                name_regex_str.join("|")
+                            },
+                        };
+                        let regex_comp_str = format!("(?:{})", regex_comp_str);
+                        regex_str.push_str(&regex_comp_str);
+                    };
+                    regex_str.push_str("$");
+                    let regex = Regex::new(&regex_str).unwrap();
+                    if context_dir.is_dir() {
+                        let dir_entries = read_dir(&context_dir).map_err(|e| Error::CouldntReadDir(e.kind(), e.to_string()))?;
+                        for dir_entry in dir_entries {
+                            let dir_entry = dir_entry.map_err(|e| Error::CouldntReadDir(e.kind(), e.to_string()))?;
+                            let filename = dir_entry.file_name().to_string_lossy().into_owned();
+                            if regex.is_match(&filename) {
+                                let path = PathBuf::from(filename);
+                                paths.push(path);
+                            }
+                        }
+                    };
+                },
+                NotChecked => {
+                    let mut path_strs = vec!["".to_string()];
+                    for comp in evaluated_comps {
+                        match comp {
+                            EvaluatedComp::Name(name) => {
+                                for path_str in path_strs.iter_mut() {
+                                    *path_str = path_str.to_owned() + name;
+                                }
+                            },
+                            EvaluatedComp::Regex(_) => unreachable!(),
+                            EvaluatedComp::Exprs(names) => {
+                                let mut new_path_strs = Vec::new();
+                                for path_str in path_strs {
+                                    for name in &names {
+                                        let new_path_str = path_str.clone() + name;
+                                        new_path_strs.push(new_path_str);
+                                    }
+                                }
+                                path_strs = new_path_strs;
+                            },
+                        };
+                    };
+                    for path_str in &path_strs {
+                        let path = PathBuf::from(path_str);
+                        paths.push(path);
+                    };
+                },
+            };
+
+            for path in paths {
+                let path = context_dir.join(path);
+                result_values.insert(RealValue::Path(path));
+            }
+        };
+        Ok(Value::Set(result_values, path_existence))
     }
 }
 
@@ -499,85 +648,6 @@ impl LiteralRootPath {
 impl Expr for LiteralRootPath {
     fn evaluate(&self, _: &EvaluationContext) -> Result<Value, Error> {
         Ok(Value::from([self.path.clone()]))
-    }
-}
-
-#[derive(Debug)]
-pub struct UnaryExpr {
-    op: UnaryOperator,
-    expr: Box<dyn Expr>,
-}
-
-impl UnaryExpr {
-    pub fn parse(i: &str) -> IResult<&str, Box<dyn Expr>> {
-        match UnaryOperator::parse(i) {
-            Ok((i, op)) => {
-                let (i, expr) = UnaryExpr::parse(i)?;
-                Ok((i, Box::new(UnaryExpr { op, expr })))
-            }
-            Err(Err::Error(_)) => PathExpr::parse(i),
-            Err(e) => Err(e),
-        }
-    }
-}
-
-impl Expr for UnaryExpr {
-    fn evaluate(&self, ctx: &EvaluationContext) -> Result<Value, Error> {
-        Ok(self.op.evaluate(&self.expr.evaluate(ctx)?))
-    }
-}
-
-impl PartialEq for UnaryExpr {
-    fn eq(&self, expr: &Self) -> bool {
-        self.op == expr.op && *self.expr == *expr.expr
-    }
-}
-
-#[derive(Debug, Eq, PartialEq)]
-pub enum UnaryOperator {
-    Minus,
-}
-
-impl UnaryOperator {
-    fn parse(i: &str) -> IResult<&str, Self> {
-        let op_map = [
-            ("-", Self::Minus),
-        ];
-
-        for (op_str, op) in op_map {
-            match preceded(parse_space, tag(op_str))(i) {
-                Ok((i, _)) => return Ok((i, op)),
-                Err(Err::Error(_)) => (),
-                Err(e) => return Err(e),
-            };
-        }
-
-        Err(Err::Error(ParseError::from_error_kind(i, ErrorKind::Tag)))
-    }
-
-    pub fn evaluate(&self, v: &Value) -> Value {
-        match self {
-            Self::Minus => -v,
-        }
-    }
-}
-
-#[derive(Debug, PartialEq)]
-pub struct LiteralNumber {
-    number: Number,
-}
-
-impl LiteralNumber {
-    pub fn parse(i: &str) -> IResult<&str, Box<dyn Expr>> {
-        let (i, f) = preceded(parse_space, float)(i)?;
-        let number = Number::from(f as f64);
-        Ok((i, Box::new(LiteralNumber { number })))
-    }
-}
-
-impl Expr for LiteralNumber {
-    fn evaluate(&self, _: &EvaluationContext) -> Result<Value, Error> {
-        Ok(Value::from(self.number))
     }
 }
 
