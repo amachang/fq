@@ -95,7 +95,7 @@ fn test_union_expression() {
 fn test_parse() {
     let result_map = [
         ("/t*p", Value::from([PathBuf::from("/tmp")])),
-        // ("foo{bar,baz}/{aaa,bbb}", Value::from([PathBuf::from("foobar/aaa"), PathBuf::from("foobar/bbb"), PathBuf::from("foobaz/aaa"), PathBuf::from("foobaz/bbb")])),
+        ("foo{bar,baz}/{aaa,bbb}", Value::from([PathBuf::from("foobar/aaa"), PathBuf::from("foobar/bbb"), PathBuf::from("foobaz/aaa"), PathBuf::from("foobaz/bbb")])),
         ("foo/bar/baz", Value::from([PathBuf::from("foo/bar/baz")])),
         ("001/002/003", Value::from([PathBuf::from("001/002/003")])),
         ("(001 + 002)/003/004", Value::from([PathBuf::from("3/003/004")])),

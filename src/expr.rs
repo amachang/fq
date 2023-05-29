@@ -323,8 +323,7 @@ pub struct PathStepExpr {
 
 impl Expr for PathStepExpr {
     fn evaluate(&self, ctx: &EvaluationContext) -> Result<Value, Error> {
-        let context_value = ctx.get_context_value();
-        self.step.evaluate(&ctx, context_value)
+        self.step.evaluate(&ctx, &Value::from(""))
     }
 }
 
