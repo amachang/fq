@@ -64,11 +64,11 @@ pub struct EvaluationContext <'a> {
     pub(crate) parent: Option<Box<&'a EvaluationContext<'a>>>,
     pub(crate) fn_map: HashMap<String, fn(&EvaluationContext, &[Value]) -> Value>,
     pub(crate) var_map: HashMap<String, Value>,
-    pub(crate) context_value: &'a Value,
+    pub(crate) context_value: Value,
 }
 
 impl<'a> EvaluationContext <'a> {
-    pub fn new(context_value: &'a Value) -> EvaluationContext {
+    pub fn new(context_value: Value) -> EvaluationContext<'a> {
         let mut ctx = EvaluationContext {
             parent: None,
             fn_map: HashMap::new(),
@@ -135,15 +135,18 @@ impl<'a> EvaluationContext <'a> {
     }
 
     pub fn get_context_value(&self) -> &Value {
-        self.context_value
+        &self.context_value
     }
 
-    pub fn scope(&'a self, value: &'a Value) -> Self {
+    pub fn scope(&'a self, value: Value) -> Self {
+        let parent_dir: PathBuf = self.context_value.clone().into();
+        let context_dir: PathBuf = value.into();
+
         Self {
             parent: Some(Box::new(self)),
             fn_map: HashMap::new(),
             var_map: HashMap::new(),
-            context_value: value,
+            context_value: Value::from(parent_dir.join(context_dir)),
         }
     }
 }
@@ -423,7 +426,7 @@ impl PathStep {
             let value = next_value;
             let mut values = Vec::new();
             for context_value in &value {
-                let ctx = &ctx.scope(&context_value);
+                let ctx = &ctx.scope(context_value.clone());
                 let predicate_value = predicate_expr.evaluate(ctx)?;
                 let predicate_value: bool = predicate_value.into();
 
@@ -516,7 +519,7 @@ impl PathStepOperation {
         let mut result_values = BTreeSet::new();
 
         for context_value in values {
-            let ctx = ctx.scope(&context_value);
+            let ctx = ctx.scope(context_value.clone());
             let mut evaluated_comps = Vec::new();
             for comp in components {
                 let evaluated_comp = match comp {
@@ -534,7 +537,7 @@ impl PathStepOperation {
                 evaluated_comps.push(evaluated_comp)
             };
 
-            let context_dir: PathBuf = ctx.get_context_value().into();
+            let context_dir: PathBuf = context_value.clone().into();
             let mut paths = Vec::new();
             match path_existence {
                 Checked => {

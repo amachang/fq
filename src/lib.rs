@@ -46,8 +46,7 @@ pub fn parse(i: &str) -> Result<Box<dyn Expr>, nom::Err<nom::error::Error<&str>>
 }
 
 pub fn evaluate(expr: &dyn Expr) -> Result<Value, Error> {
-    let context_value = Value::from([PathBuf::from("")]);
-    let ctx = EvaluationContext::new(&context_value);
+    let ctx = EvaluationContext::new(Value::from(PathBuf::from("")));
     expr.evaluate(&ctx)
 }
 
