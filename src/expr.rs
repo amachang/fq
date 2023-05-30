@@ -36,19 +36,22 @@ use regex::Regex;
 use nom::{
     bytes::complete::{
         tag,
-        take_until,
+        take_while,
     },
     character::complete::{
         alphanumeric1,
         satisfy,
+        char,
     },
     sequence::{
         preceded,
         pair,
+        terminated,
     },
     branch::alt,
     combinator::{
         recognize,
+        cut,
     },
     multi::many1_count,
     Err,
@@ -203,18 +206,14 @@ pub fn parse_expr_list<'a, T>(delimiter: &'static str, i: &'a str, parse: fn(i: 
     Ok((next_i, exprs))
 }
 
-pub fn parse_enclosed_expr<'a, T>(open_bracket: &'static str, close_bracket: &'static str, i: &'a str, parse: fn(i: &'a str) -> ParseResult<T>) -> ParseResult<'a, T> {
-    let (i, _) = preceded(parse_space, tag(open_bracket))(i)?;
+pub fn parse_enclosed_expr<T>(open_bracket: char, close_bracket: char, i: &str, parse: fn(i: &str) -> ParseResult<T>) -> ParseResult<T> {
+    let (i, _) = preceded(parse_space, char(open_bracket))(i)?;
     let (i, expr) = match parse(i) {
         Ok(r) => r,
         Err(Err::Error(e)) => return Err(Err::Failure(e)),
         Err(e) => return Err(e),
     };
-    let (i, _) = match preceded(parse_space, tag(close_bracket))(i) {
-        Ok(r) => r,
-        Err(Err::Error(e)) => return Err(Err::Failure(e)),
-        Err(e) => return Err(e),
-    };
+    let (i, _) = cut(preceded(parse_space, char(close_bracket)))(i)?;
     Ok((i, expr))
 }
 
@@ -305,7 +304,7 @@ pub struct PathRootExpr {
 impl PathRootExpr {
     pub fn parse(i: &str) -> ParseResult<Box<dyn Expr>> {
         let (i, expr) = alt((
-                |i| parse_enclosed_expr("(", ")", i, FilterExpr::parse),
+                |i| parse_enclosed_expr('(', ')', i, FilterExpr::parse),
                 LiteralString::parse,
                 FunctionCall::parse,
                 LiteralRootPath::parse,
@@ -404,7 +403,7 @@ impl PathStep {
         alt((
                 Self::parse_name_component,
                 Self::parse_match_all_component,
-                Self:: parse_exprs_component,
+                Self::parse_exprs_component,
         ))(i)
     }
 
@@ -419,7 +418,7 @@ impl PathStep {
     }
 
     fn parse_exprs_component(i: &str) -> ParseResult<PathStepPatternComponent> {
-        let (i, exprs) = parse_enclosed_expr("{", "}", i, |i| parse_expr_list(",", i, FilterExpr::parse))?;
+        let (i, exprs) = parse_enclosed_expr('{', '}', i, |i| parse_expr_list(",", i, FilterExpr::parse))?;
         Ok((i, PathStepPatternComponent::Exprs(exprs)))
     }
 
@@ -428,7 +427,7 @@ impl PathStep {
         let mut next_i = i;
         loop {
             let i = next_i;
-            let (i, predicate_expr) = match parse_enclosed_expr("[", "]", i, FilterExpr::parse) {
+            let (i, predicate_expr) = match parse_enclosed_expr('[', ']', i, FilterExpr::parse) {
                 Ok(r) => r,
                 Err(Err::Error(_)) => break,
                 Err(e) => return Err(e),
@@ -735,14 +734,9 @@ impl LiteralString {
     pub fn parse(i: &str) -> ParseResult<Box<dyn Expr>> {
         let (i, quote_char) = preceded(
             parse_space,
-            alt((tag("\""), tag("'")))
+            alt((char('"'), char('\'')))
         )(i)?;
-        let (i, string) = take_until(quote_char)(i)?;
-        let (i, _) = match preceded(parse_space, tag(quote_char))(i) {
-            Ok(r) => r,
-            Err(Err::Error(e)) => return Err(Err::Failure(e)),
-            Err(e) => return Err(e),
-        };
+        let (i, string) = cut(terminated(take_while(|c| c != quote_char), char(quote_char)))(i)?;
         Ok((i, Box::new(LiteralString { string: string.to_string() })))
     }
 }

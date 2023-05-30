@@ -122,6 +122,7 @@ fn test_parse() {
 
     let error_map = [
         ("1 == 1", "== 1"),
+        ("\"aaaa", ""),
     ];
 
     for (source, remaining_input) in error_map {
