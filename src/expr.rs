@@ -691,20 +691,10 @@ impl FunctionCall {
             parse_space,
             parse_identifier,
         )(i)?;
-        let (i, _) = preceded(
-            parse_space,
-            tag("("),
-        )(i)?;
 
-        let (i, arg_exprs) = parse_expr_list(",", i, FilterExpr::parse)?;
-
-        let (i, _) = match preceded(parse_space, tag(")"))(i) {
-            Ok(r) => r,
-            Err(Err::Error(e)) => return Err(Err::Failure(e)),
-            Err(e) => return Err(e),
-        };
-
+        let (i, arg_exprs) = parse_enclosed_expr('(', ')', i, |i| parse_expr_list(",", i, FilterExpr::parse))?;
         let identifier = identifier.to_string();
+
         Ok((i, Box::new(FunctionCall { identifier, arg_exprs })))
     }
 }
