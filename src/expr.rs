@@ -60,6 +60,8 @@ use nom::{
     },
 };
 
+use dirs::home_dir;
+
 pub struct EvaluationContext <'a> {
     pub(crate) parent: Option<Box<&'a EvaluationContext<'a>>>,
     pub(crate) fn_map: HashMap<String, fn(&EvaluationContext, &[Value]) -> Value>,
@@ -244,7 +246,7 @@ pub struct PathExpr {
 
 impl PathExpr {
     pub fn parse(i: &str) -> IResult<&str, Box<dyn Expr>> {
-        let (i, root_expr) = match LiteralRootPath::parse(i) {
+        let (i, root_expr) = match LiteralRootPath::parse_separator_like_root_path(i) {
             Ok(r) => r,
             Err(Err::Error(_)) => {
                 let (i, root_expr) = PathRootExpr::parse(i)?;
@@ -290,6 +292,7 @@ impl PathRootExpr {
                 |i| parse_enclosed_expr("(", ")", i, UnionExpr::parse),
                 LiteralString::parse,
                 FunctionCall::parse,
+                LiteralRootPath::parse,
                 |i| -> IResult<&str, Box<dyn Expr>> {
                     let (i, step) = PathStep::parse(i)?;
                     Ok((i, Box::new(PathStepExpr { step })))
@@ -614,13 +617,18 @@ pub struct LiteralRootPath {
 
 impl LiteralRootPath {
     #[cfg(not(windows))]
-    pub fn parse(i: &str) -> IResult<&str, Box<dyn Expr>> {
+    pub fn parse_separator_like_root_path(i: &str) -> IResult<&str, Box<dyn Expr>> {
         Self::parse_for_unix(i)
     }
 
     #[cfg(windows)]
-    pub fn parse(i: &str) -> IResult<&str, Box<dyn Expr>> {
+    pub fn parse_separator_like_root_path(i: &str) -> IResult<&str, Box<dyn Expr>> {
         Self::parse_for_windows(i)
+    }
+
+    pub fn parse(i: &str) -> IResult<&str, Box<dyn Expr>> {
+        let (i, _) = preceded(parse_space, tag("~"))(i)?;
+        Ok((i, Box::new(LiteralRootPath { path: home_dir().unwrap_or(PathBuf::from("/")) })))
     }
 
     pub fn parse_for_unix(i: &str) -> IResult<&str, Box<dyn Expr>> {
