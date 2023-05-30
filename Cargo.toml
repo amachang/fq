@@ -12,5 +12,6 @@ name = "fq"
 name = "fq"
 
 [dependencies]
+clap = { version = "4.3.0", features = ["derive"] }
 nom = "7"
 regex = "1.8"
