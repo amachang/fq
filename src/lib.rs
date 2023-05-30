@@ -18,7 +18,7 @@ pub use expr::{
     EvaluationContext,
     Error,
     Expr,
-    UnionExpr,
+    FilterExpr,
     LiteralString,
     BinaryExpr,
     BinaryOperator,

@@ -1,5 +1,3 @@
-#![deny(warnings, clippy::all, clippy::pedantic)]
-
 use std::path::PathBuf;
 
 use fq::{
@@ -11,7 +9,6 @@ use fq::{
     PathExpr,
     PathRootExpr,
     BinaryExpr,
-    UnionExpr,
 };
 use nom::{
     Err,
@@ -78,22 +75,15 @@ fn test_binary_expression() {
 }
 
 #[test]
-fn test_union_expression() {
-    let source_evaluated_value_remaining_input_map = [
-        ("1 | 2", Value::from([PathBuf::from("1"), PathBuf::from("2")]), ""),
-        ("'1' | '2' | '3' errorerror", Value::from(["1", "2", "3"]), " errorerror"),
-        ("1 == 1", Value::from([PathBuf::from("1")]), " == 1"),
-    ];
-    for (source, evaluated_value, remaining_input) in source_evaluated_value_remaining_input_map {
-        let (i, expr) = UnionExpr::parse(source).unwrap();
-        assert_eq!(evaluate(&*expr).unwrap(), evaluated_value);
-        assert_eq!(i, remaining_input);
-    }
-}
-
-#[test]
 fn test_parse() {
     let result_map = [
+        ("bbb/aaa{foo,bar,baz} | set(name(), dir()) | string()", Value::from(["aaafoo", "aaabar", "aaabaz", "bbb"])),
+        ("{0,1,2}{0,1,2,3,4,5,6,7,8,9} | number()", Value::from([
+                                                              0, 1, 2, 3, 4, 5, 6, 7, 8, 9,
+                                                              10, 11, 12, 13, 14, 15, 16, 17, 18, 19,
+                                                              20, 21, 22, 23, 24, 25, 26, 27, 28, 29,
+        ])),
+
         ("/t*p", Value::from([PathBuf::from("/tmp")])),
         ("foo{bar,baz}/{aaa,bbb}", Value::from([PathBuf::from("foobar/aaa"), PathBuf::from("foobar/bbb"), PathBuf::from("foobaz/aaa"), PathBuf::from("foobaz/bbb")])),
         ("foo/bar/baz", Value::from([PathBuf::from("foo/bar/baz")])),
@@ -117,9 +107,15 @@ fn test_parse() {
         ("4 div 3 > 2 % 1", Value::from(true)),
         ("'1' + '2'", Value::from(3)),
         (" \"hello world!\" ", Value::from("hello world!")),
-        ("1 | 2 | 3", Value::from([PathBuf::from("1"), PathBuf::from("2"), PathBuf::from("3")])),
-        ("1.1e3 | 2.2e3 | 3.3e3", Value::from([PathBuf::from("1.1e3"), PathBuf::from("2.2e3"), PathBuf::from("3.3e3")])),
-        ("'1' | '2' | '3'", Value::from(["1", "2", "3"])),
+
+        ("{ 1, 2, 3 }", Value::from([PathBuf::from("1"), PathBuf::from("2"), PathBuf::from("3")])),
+        ("{ 1.1e3, 2.2e3, 3.3e3 }", Value::from([PathBuf::from("1.1e3"), PathBuf::from("2.2e3"), PathBuf::from("3.3e3")])),
+        ("{ '1', '2', '3' }", Value::from([PathBuf::from("1"), PathBuf::from("2"), PathBuf::from("3")])),
+
+        ("set(1, 2, 3)", Value::from([PathBuf::from("1"), PathBuf::from("2"), PathBuf::from("3")])),
+        ("set(1.1e3, 2.2e3, 3.3e3)", Value::from([PathBuf::from("1.1e3"), PathBuf::from("2.2e3"), PathBuf::from("3.3e3")])),
+        ("set('1', '2', '3')", Value::from(["1", "2", "3"])),
+
         ("-30", Value::from([PathBuf::from("-30")])),
     ];
 

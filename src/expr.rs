@@ -103,6 +103,15 @@ impl<'a> EvaluationContext <'a> {
                 None => Value::from(""),
             }
         });
+        ctx.register_function("dir", |ctx, vs| {
+            let ref_value = if vs.len() < 1 { ctx.get_context_value() } else { &vs[0] };
+            let path: PathBuf = ref_value.into();
+            match path.parent() {
+                Some(os_name) => Value::from(os_name.to_string_lossy().into_owned()), // TODO String should be
+                                                                                      // contains OsString
+                None => Value::from(""),
+            }
+        });
         ctx
     }
 
@@ -168,7 +177,7 @@ impl PartialEq for dyn Expr {
 }
 
 pub fn parse(i: &str) -> IResult<&str, Box<dyn Expr>> {
-    UnionExpr::parse(i)
+    FilterExpr::parse(i)
 }
 
 pub fn parse_expr_list<'a, T>(delimiter: &'static str, i: &'a str, parse: fn(i: &str) -> IResult<&str, T>) -> IResult<&'a str, Vec<T>> {
@@ -210,11 +219,11 @@ pub fn parse_enclosed_expr<'a, T>(open_bracket: &'static str, close_bracket: &'s
 }
 
 #[derive(Debug, PartialEq)]
-pub struct UnionExpr {
+pub struct FilterExpr {
     exprs: Vec<Box<dyn Expr>>,
 }
 
-impl UnionExpr {
+impl FilterExpr {
     pub fn parse(i: &str) -> IResult<&str, Box<dyn Expr>> {
         let (i, exprs) = parse_expr_list("|", i, BinaryExpr::parse)?;
 
@@ -224,14 +233,23 @@ impl UnionExpr {
             let expr = exprs.into_iter().next().unwrap();
             Ok((i, expr))
         } else {
-            Ok((i, Box::new(UnionExpr { exprs })))
+            Ok((i, Box::new(FilterExpr { exprs })))
         }
     }
 }
 
-impl Expr for UnionExpr {
+impl Expr for FilterExpr {
     fn evaluate(&self, ctx: &EvaluationContext) -> Result<Value, Error> {
-        let values: Vec<Value> = self.exprs.iter().map(|expr| Ok(expr.evaluate(ctx)?)).collect::<Result<Vec<Value>, Error>>()?;
+        let mut values = ctx.get_context_value().clone();
+        for expr in &self.exprs {
+            let mut value_vec = Vec::new();
+            for value in &values {
+                let ctx = ctx.scope(value);
+                let value = expr.evaluate(&ctx)?;
+                value_vec.push(value);
+            }
+            values = Value::from(value_vec);
+        }
         Ok(Value::from(values))
     }
 }
@@ -287,7 +305,7 @@ pub struct PathRootExpr {
 impl PathRootExpr {
     pub fn parse(i: &str) -> IResult<&str, Box<dyn Expr>> {
         let (i, expr) = alt((
-                |i| parse_enclosed_expr("(", ")", i, UnionExpr::parse),
+                |i| parse_enclosed_expr("(", ")", i, FilterExpr::parse),
                 LiteralString::parse,
                 FunctionCall::parse,
                 LiteralRootPath::parse,
@@ -401,7 +419,7 @@ impl PathStep {
     }
 
     fn parse_exprs_component(i: &str) -> IResult<&str, PathStepPatternComponent> {
-        let (i, exprs) = parse_enclosed_expr("{", "}", i, |i| parse_expr_list(",", i, UnionExpr::parse))?;
+        let (i, exprs) = parse_enclosed_expr("{", "}", i, |i| parse_expr_list(",", i, FilterExpr::parse))?;
         Ok((i, PathStepPatternComponent::Exprs(exprs)))
     }
 
@@ -410,7 +428,7 @@ impl PathStep {
         let mut next_i = i;
         loop {
             let i = next_i;
-            let (i, predicate_expr) = match parse_enclosed_expr("[", "]", i, UnionExpr::parse) {
+            let (i, predicate_expr) = match parse_enclosed_expr("[", "]", i, FilterExpr::parse) {
                 Ok(r) => r,
                 Err(Err::Error(_)) => break,
                 Err(e) => return Err(e),
@@ -528,12 +546,14 @@ impl PathStepOperation {
                     Comp::Name(name) => EvaluatedComp::Name(name),
                     Comp::Regex(regex) => EvaluatedComp::Regex(regex),
                     Comp::Exprs(exprs) => {
-                        let mut results = Vec::new();
+                        let mut result_strs = Vec::new();
                         for expr in exprs {
-                            let result = expr.evaluate(&ctx)?;
-                            results.push(result.into());
+                            let results = expr.evaluate(&ctx)?;
+                            for result in &results {
+                                result_strs.push(result.into());
+                            }
                         };
-                        EvaluatedComp::Exprs(results)
+                        EvaluatedComp::Exprs(result_strs)
                     },
                 };
                 evaluated_comps.push(evaluated_comp)
@@ -677,7 +697,7 @@ impl FunctionCall {
             tag("("),
         )(i)?;
 
-        let (i, arg_exprs) = parse_expr_list(",", i, UnionExpr::parse)?;
+        let (i, arg_exprs) = parse_expr_list(",", i, FilterExpr::parse)?;
 
         let (i, _) = match preceded(parse_space, tag(")"))(i) {
             Ok(r) => r,
