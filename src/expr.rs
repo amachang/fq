@@ -21,9 +21,7 @@ use std::{
         BTreeSet,
     },
     io,
-    fs::{
-        read_dir,
-    },
+    fs,
     path,
     path::{
         Path,
@@ -479,9 +477,10 @@ impl PathStepOperation {
         let mut result_path_values = BTreeSet::new();
         for value in values {
             let path: PathBuf = value.into();
-            if path.is_dir() {
+            if is_dir(&path) {
                 Self::get_descendant_path_values(&path, &mut result_path_values)?;
             }
+            result_path_values.insert(RealValue::Path(path));
         };
         Ok(Value::Set(result_path_values, PathExistence::Checked))
     }
@@ -491,8 +490,8 @@ impl PathStepOperation {
         let dir_entries = read_dir(dir).map_err(|e| Error::CouldntReadDir(e.kind(), e.to_string()))?;
         for dir_entry in dir_entries {
             let dir_entry = dir_entry.map_err(|e| Error::CouldntReadDir(e.kind(), e.to_string()))?;
-            let path = dir_entry.path();
-            if path.is_dir() {
+            let path = dir.join(dir_entry.file_name());
+            if is_dir(&path) {
                 Self::get_descendant_path_values(&path, result_path_values)?;
             }
             result_path_values.insert(RealValue::Path(path));
@@ -560,7 +559,7 @@ impl PathStepOperation {
                     };
                     regex_str.push_str("$");
                     let regex = Regex::new(&regex_str).unwrap();
-                    if context_dir.is_dir() {
+                    if is_dir(&context_dir) {
                         let dir_entries = read_dir(&context_dir).map_err(|e| Error::CouldntReadDir(e.kind(), e.to_string()))?;
                         for dir_entry in dir_entries {
                             let dir_entry = dir_entry.map_err(|e| Error::CouldntReadDir(e.kind(), e.to_string()))?;
@@ -887,5 +886,25 @@ impl BinaryOperator {
             Self::Or => Value::from(lv.into() || rv.into()),
         }
     }
+}
+
+fn ensure_not_empty_path(path: &Path) -> &Path {
+    if path == Path::new("") {
+        Path::new(".")
+    } else {
+        path
+    }
+}
+
+fn is_dir(path: impl AsRef<Path>) -> bool {
+    let path = path.as_ref();
+    let path = ensure_not_empty_path(path);
+    path.is_dir()
+}
+
+fn read_dir(path: impl AsRef<Path>) -> io::Result<fs::ReadDir> {
+    let path = path.as_ref();
+    let path = ensure_not_empty_path(path);
+    fs::read_dir(path)
 }
 

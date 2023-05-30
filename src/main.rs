@@ -9,6 +9,7 @@ use nom::{
 };
 
 use clap::{
+    ArgAction,
     Parser,
 };
 
@@ -16,6 +17,9 @@ use clap::{
 #[command(author, version, about, long_about = None)]
 struct Args {
     query: String,
+
+    #[arg(long, action = ArgAction::SetTrue)]
+    show_parsed_expr: bool,
 }
 
 fn main() {
@@ -31,6 +35,10 @@ fn main() {
             return ();
         },
         Ok(expr) => expr,
+    };
+
+    if args.show_parsed_expr {
+        println!("Pasred Expression: {:?}", expr);
     };
 
     let result = evaluate(&*expr);
