@@ -15,18 +15,21 @@ use nom::{
     },
     branch::alt,
     multi::many0_count,
+    error::VerboseError,
 };
 
-pub fn parse_eof(i: &str) -> IResult<&str, &str> {
+pub type ParseResult<'a, O> = IResult<&'a str, O, VerboseError<&'a str>>;
+
+pub fn parse_eof(i: &str) -> ParseResult<&str> {
     preceded(parse_space, eof)(i)
 }
 
-pub fn parse_space(i: &str) -> IResult<&str, &str> {
+pub fn parse_space(i: &str) -> ParseResult<&str> {
     let chars = " \t\r\n";
     take_while(move |c| chars.contains(c))(i)
 }
 
-pub fn parse_identifier(i: &str) -> IResult<&str, &str> {
+pub fn parse_identifier(i: &str) -> ParseResult<&str> {
   recognize(
     pair(
       alt((alpha1, tag("_"))),

@@ -2,6 +2,7 @@ use super::{
     parse_util::{
         parse_space,
         parse_identifier,
+        ParseResult,
     },
     value::{
         Value,
@@ -33,7 +34,6 @@ use regex;
 use regex::Regex;
 
 use nom::{
-    IResult,
     bytes::complete::{
         tag,
         take_until,
@@ -176,11 +176,11 @@ impl PartialEq for dyn Expr {
     }
 }
 
-pub fn parse(i: &str) -> IResult<&str, Box<dyn Expr>> {
+pub fn parse(i: &str) -> ParseResult<Box<dyn Expr>> {
     FilterExpr::parse(i)
 }
 
-pub fn parse_expr_list<'a, T>(delimiter: &'static str, i: &'a str, parse: fn(i: &str) -> IResult<&str, T>) -> IResult<&'a str, Vec<T>> {
+pub fn parse_expr_list<'a, T>(delimiter: &'static str, i: &'a str, parse: fn(i: &'a str) -> ParseResult<T>) -> ParseResult<'a, Vec<T>> {
     let mut exprs: Vec<T> = Vec::new();
     let mut next_i = i;
     loop {
@@ -203,7 +203,7 @@ pub fn parse_expr_list<'a, T>(delimiter: &'static str, i: &'a str, parse: fn(i: 
     Ok((next_i, exprs))
 }
 
-pub fn parse_enclosed_expr<'a, T>(open_bracket: &'static str, close_bracket: &'static str, i: &'a str, parse: fn(i: &str) -> IResult<&str, T>) -> IResult<&'a str, T> {
+pub fn parse_enclosed_expr<'a, T>(open_bracket: &'static str, close_bracket: &'static str, i: &'a str, parse: fn(i: &'a str) -> ParseResult<T>) -> ParseResult<'a, T> {
     let (i, _) = preceded(parse_space, tag(open_bracket))(i)?;
     let (i, expr) = match parse(i) {
         Ok(r) => r,
@@ -224,7 +224,7 @@ pub struct FilterExpr {
 }
 
 impl FilterExpr {
-    pub fn parse(i: &str) -> IResult<&str, Box<dyn Expr>> {
+    pub fn parse(i: &str) -> ParseResult<Box<dyn Expr>> {
         let (i, exprs) = parse_expr_list("|", i, BinaryExpr::parse)?;
 
         if 0 == exprs.len() {
@@ -261,7 +261,7 @@ pub struct PathExpr {
 }
 
 impl PathExpr {
-    pub fn parse(i: &str) -> IResult<&str, Box<dyn Expr>> {
+    pub fn parse(i: &str) -> ParseResult<Box<dyn Expr>> {
         let (i, root_expr) = match LiteralRootPath::parse_separator_like_root_path(i) {
             Ok(r) => r,
             Err(Err::Error(_)) => {
@@ -303,13 +303,13 @@ pub struct PathRootExpr {
 }
 
 impl PathRootExpr {
-    pub fn parse(i: &str) -> IResult<&str, Box<dyn Expr>> {
+    pub fn parse(i: &str) -> ParseResult<Box<dyn Expr>> {
         let (i, expr) = alt((
                 |i| parse_enclosed_expr("(", ")", i, FilterExpr::parse),
                 LiteralString::parse,
                 FunctionCall::parse,
                 LiteralRootPath::parse,
-                |i| -> IResult<&str, Box<dyn Expr>> {
+                |i| -> ParseResult<Box<dyn Expr>> {
                     let (i, step) = PathStep::parse(i)?;
                     Ok((i, Box::new(PathStepExpr { step })))
                 },
@@ -356,7 +356,7 @@ pub struct PathStep {
 }
 
 impl PathStep {
-    pub fn parse(i: &str) -> IResult<&str, PathStep> {
+    pub fn parse(i: &str) -> ParseResult<PathStep> {
         let (i, _) = parse_space(i)?;
 
         match tag("**")(i) {
@@ -400,7 +400,7 @@ impl PathStep {
         Ok((i, PathStep { op, predicate_exprs }))
     }
 
-    fn parse_component(i: &str) -> IResult<&str, PathStepPatternComponent> {
+    fn parse_component(i: &str) -> ParseResult<PathStepPatternComponent> {
         alt((
                 Self::parse_name_component,
                 Self::parse_match_all_component,
@@ -408,22 +408,22 @@ impl PathStep {
         ))(i)
     }
 
-    fn parse_name_component(i: &str) -> IResult<&str, PathStepPatternComponent> {
+    fn parse_name_component(i: &str) -> ParseResult<PathStepPatternComponent> {
         let (i, name) = recognize(many1_count(alt((alphanumeric1, tag("_"), tag("-"), tag(".")))))(i)?;
         Ok((i, PathStepPatternComponent::Name(name.to_string())))
     }
 
-    fn parse_match_all_component(i: &str) -> IResult<&str, PathStepPatternComponent> {
+    fn parse_match_all_component(i: &str) -> ParseResult<PathStepPatternComponent> {
         let (i, _) = tag("*")(i)?;
         Ok((i, PathStepPatternComponent::Regex("(?:.*?)".to_string())))
     }
 
-    fn parse_exprs_component(i: &str) -> IResult<&str, PathStepPatternComponent> {
+    fn parse_exprs_component(i: &str) -> ParseResult<PathStepPatternComponent> {
         let (i, exprs) = parse_enclosed_expr("{", "}", i, |i| parse_expr_list(",", i, FilterExpr::parse))?;
         Ok((i, PathStepPatternComponent::Exprs(exprs)))
     }
 
-    fn parse_predicates(i: &str) -> IResult<&str, Vec<Box<dyn Expr>>> {
+    fn parse_predicates(i: &str) -> ParseResult<Vec<Box<dyn Expr>>> {
         let mut predicate_exprs: Vec<Box<dyn Expr>> = Vec::new();
         let mut next_i = i;
         loop {
@@ -636,26 +636,26 @@ pub struct LiteralRootPath {
 
 impl LiteralRootPath {
     #[cfg(not(windows))]
-    pub fn parse_separator_like_root_path(i: &str) -> IResult<&str, Box<dyn Expr>> {
+    pub fn parse_separator_like_root_path(i: &str) -> ParseResult<Box<dyn Expr>> {
         Self::parse_for_unix(i)
     }
 
     #[cfg(windows)]
-    pub fn parse_separator_like_root_path(i: &str) -> IResult<&str, Box<dyn Expr>> {
+    pub fn parse_separator_like_root_path(i: &str) -> ParseResult<Box<dyn Expr>> {
         Self::parse_for_windows(i)
     }
 
-    pub fn parse(i: &str) -> IResult<&str, Box<dyn Expr>> {
+    pub fn parse(i: &str) -> ParseResult<Box<dyn Expr>> {
         let (i, _) = preceded(parse_space, tag("~"))(i)?;
         Ok((i, Box::new(LiteralRootPath { path: home_dir().unwrap_or(PathBuf::from("/")) })))
     }
 
-    pub fn parse_for_unix(i: &str) -> IResult<&str, Box<dyn Expr>> {
+    pub fn parse_for_unix(i: &str) -> ParseResult<Box<dyn Expr>> {
         let (i, path) = preceded(parse_space, tag("/"))(i)?;
         Ok((i, Box::new(LiteralRootPath { path: PathBuf::from(path) })))
     }
 
-    pub fn parse_for_windows(i: &str) -> IResult<&str, Box<dyn Expr>> {
+    pub fn parse_for_windows(i: &str) -> ParseResult<Box<dyn Expr>> {
         let (i, path) = preceded(
             parse_space,
             recognize(
@@ -669,7 +669,7 @@ impl LiteralRootPath {
         Ok((i, Box::new(LiteralRootPath { path: PathBuf::from(path) })))
     }
 
-    fn parse_windows_drive_root(i: &str) -> IResult<&str, &str> {
+    fn parse_windows_drive_root(i: &str) -> ParseResult<&str> {
         recognize(pair(satisfy(|c| 'A' <= c && c <= 'Z'), tag(r":\")))(i)
     }
 }
@@ -687,7 +687,7 @@ pub struct FunctionCall {
 }
 
 impl FunctionCall {
-    pub fn parse<'a>(i: &str) -> IResult<&str, Box<dyn Expr>> {
+    pub fn parse(i: &str) -> ParseResult<Box<dyn Expr>> {
         let (i, identifier) = preceded(
             parse_space,
             parse_identifier,
@@ -732,7 +732,7 @@ pub struct LiteralString {
 }
 
 impl LiteralString {
-    pub fn parse(i: &str) -> IResult<&str, Box<dyn Expr>> {
+    pub fn parse(i: &str) -> ParseResult<Box<dyn Expr>> {
         let (i, quote_char) = preceded(
             parse_space,
             alt((tag("\""), tag("'")))
@@ -761,7 +761,7 @@ pub struct BinaryExpr {
 }
 
 impl BinaryExpr {
-    pub fn parse(i: &str) -> IResult<&str, Box<dyn Expr>> {
+    pub fn parse(i: &str) -> ParseResult<Box<dyn Expr>> {
         let mut stack: Vec<(&str, BinaryOperator, Box<dyn Expr>)> = Vec::new();
         let mut current_i = i;
         let (i, expr) = loop {
@@ -861,7 +861,7 @@ impl BinaryOperator {
         }
     }
 
-    fn parse(i: &str) -> IResult<&str, Self> {
+    fn parse(i: &str) -> ParseResult<Self> {
         let op_map = [
             ("div", Self::Division),
             ("%", Self::Modulus),

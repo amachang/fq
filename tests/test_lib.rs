@@ -10,9 +10,6 @@ use fq::{
     PathRootExpr,
     BinaryExpr,
 };
-use nom::{
-    Err,
-};
 
 #[test]
 fn test_number() {
@@ -131,10 +128,10 @@ fn test_parse() {
         let result = parse(source);
         assert!(result.is_err());
         let err = match result {
-            Err(Err::Error(err)) | Err(Err::Failure(err)) => err,
+            Err(err) => err,
             _ => unreachable!(),
         };
-        assert_eq!(err.input, remaining_input);
+        assert_eq!(err.errors[0].0, remaining_input);
     }
 }
 

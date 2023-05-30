@@ -4,8 +4,7 @@ use fq::{
 };
 
 use nom::{
-    Err,
-    // error::convert_error,
+    error::convert_error,
 };
 
 use clap::{
@@ -24,14 +23,12 @@ struct Args {
 
 fn main() {
     let args = Args::parse();
-    let query = &args.query;
+    let query: &str = &args.query;
     let result = parse(query);
 
     let expr = match result {
-        Err(Err::Incomplete(_)) => unreachable!(),
-        Err(Err::Error(e)) | Err(Err::Failure(e)) => {
-            // println!("Parse Error: \n{}", convert_error(query, e));
-            println!("Parse Error: {}", e);
+        Err(e) => {
+            println!("Parse Error: \n{}", convert_error(query, e));
             return ();
         },
         Ok(expr) => expr,

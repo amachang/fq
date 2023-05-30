@@ -30,18 +30,21 @@ pub use expr::{
 
 use nom::{
     IResult,
+    Err,
+    error::VerboseError,
 };
 
-fn parse_root(i: &str) -> IResult<&str, Box<dyn Expr>> {
+fn parse_root(i: &str) -> IResult<&str, Box<dyn Expr>, VerboseError<&str>> {
     let (i, expr) = expr::parse(i)?;
     let (i, _) = parse_eof(i)?;
     Ok((i, expr))
 }
 
-pub fn parse(i: &str) -> Result<Box<dyn Expr>, nom::Err<nom::error::Error<&str>>> {
+pub fn parse(i: &str) -> Result<Box<dyn Expr>, VerboseError<&str>> {
     match parse_root(i) {
         Ok((_, expr)) => Ok(expr),
-        Err(e) => Err(e),
+        Err(Err::Error(e)) | Err(Err::Failure(e)) => Err(e),
+        Err(Err::Incomplete(_)) => unreachable!(),
     }
 }
 
