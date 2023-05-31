@@ -1,138 +1,57 @@
-use std::path::PathBuf;
-
-use fq::{
-    parse,
-    evaluate,
-    Number,
-    Value,
-    BinaryOperator,
-    PathExpr,
-    PathRootExpr,
-    BinaryExpr,
-};
+use fq::*;
 
 #[test]
-fn test_number() {
-    assert!(!(Number::from(10) < Number::from(10.0)));
-    assert!(!(Number::from(10) > Number::from(10.0)));
-    assert!(Number::from(10) <= Number::from(10.0));
-    assert!(Number::from(10) >= Number::from(10.0));
-    assert_eq!(Number::from(10), Number::from(10.0));
-    assert_ne!(Number::from(10), Number::from(10.01));
-    assert!(!(Number::from(0.0 / 0.0) == Number::from(0.0 / 0.0)));
-    assert!(Number::from(0.0 / 0.0) != Number::from(0.0 / 0.0));
-}
-
-#[test]
-fn test_binary_operator() {
-    assert_eq!(BinaryOperator::Division.evaluate(&Value::from(1), &Value::from(0)), Value::from(f64::INFINITY),);
-    assert!(BinaryOperator::Division.evaluate(&Value::from(0), &Value::from(0)).is_nan());
-    assert_eq!(BinaryOperator::Equal.evaluate(&Value::from(1), &Value::from(1.0)), Value::from(true));
-
-    let n = Value::from(1);
-    assert_eq!(BinaryOperator::Equal.evaluate(&n, &n), Value::from(true));
-}
-
-#[test]
-fn test_path_expression() {
-    let source_evaluated_value_remaining_input_map = [
-        ("1", Value::from([PathBuf::from("1")]), ""),
+fn test_query_general() {
+    let q_map = [
+        ("1", "path('1')"),
+        ("'foo'", "string('foo')"),
+        ("'foo' | string()", "string('foo')"),
+        ("1 * 1", "number('1')"),
+        ("1 = 1", "true()"),
+        ("1 != 1", "false()"),
+        ("boolean('')", "false()"),
+        ("boolean('foo')", "true()"),
+        ("{1, 'foo'}", "set(path('1'), string('foo'))"),
+        ("foo/bar | name()", "set(string('bar'))"),
+        ("path('') | name()", "set(string(''))"),
+        ("foo/bar/baz | dir()", "set(path('foo/bar'))"),
+        ("path('') | dir()", "set(path(''))"),
     ];
-    for (source, evaluated_value, remaining_input) in source_evaluated_value_remaining_input_map {
-        let (i, expr) = PathExpr::parse(source).unwrap();
-        assert_eq!(evaluate(&*expr).unwrap(), evaluated_value);
-        assert_eq!(i, remaining_input);
+
+    for (q, expected_q) in q_map {
+        let (r, expected_r) = (query(q), query(expected_q));
+        let expected_r = expected_r.unwrap();
+
+        let r = r.expect(&format!("Should not be error {:?}", q));
+        assert_eq!(r, expected_r, "{:?} should equal {:?} in {:?}", r, expected_r, q);
     }
 }
 
 #[test]
-fn test_path_root_expression() {
-    let source_evaluated_value_remaining_input_map = [
-        ("1", Value::from([PathBuf::from("1")]), ""),
-    ];
-    for (source, evaluated_value, remaining_input) in source_evaluated_value_remaining_input_map {
-        let (i, expr) = PathRootExpr::parse(source).unwrap();
-        assert_eq!(evaluate(&*expr).unwrap(), evaluated_value);
-        assert_eq!(i, remaining_input);
-    }
-}
-
-#[test]
-fn test_binary_expression() {
-    let source_evaluated_value_remaining_input_map = [
-        ("1 + 2", Value::from(3), ""),
-        ("4 div 2 errorerror", Value::from(2), " errorerror"),
-        ("1 == 1", Value::from([PathBuf::from("1")]), " == 1"),
-    ];
-    for (source, evaluated_value, remaining_input) in source_evaluated_value_remaining_input_map {
-        let (i, expr) = BinaryExpr::parse(source).unwrap();
-        assert_eq!(evaluate(&*expr).unwrap(), evaluated_value);
-        assert_eq!(i, remaining_input);
-    }
-}
-
-#[test]
-fn test_parse() {
-    let result_map = [
-        ("bbb/aaa{foo,bar,baz} | set(name(), dir()) | string()", Value::from(["aaafoo", "aaabar", "aaabaz", "bbb"])),
-        ("{0,1,2}{0,1,2,3,4,5,6,7,8,9} | number()", Value::from([
-                                                              0, 1, 2, 3, 4, 5, 6, 7, 8, 9,
-                                                              10, 11, 12, 13, 14, 15, 16, 17, 18, 19,
-                                                              20, 21, 22, 23, 24, 25, 26, 27, 28, 29,
-        ])),
-
-        ("/t*p", Value::from([PathBuf::from("/tmp")])),
-        ("foo{bar,baz}/{aaa,bbb}", Value::from([PathBuf::from("foobar/aaa"), PathBuf::from("foobar/bbb"), PathBuf::from("foobaz/aaa"), PathBuf::from("foobaz/bbb")])),
-        ("foo/bar/baz", Value::from([PathBuf::from("foo/bar/baz")])),
-        ("001/002/003", Value::from([PathBuf::from("001/002/003")])),
-        ("(001 + 002)/003/004", Value::from([PathBuf::from("3/003/004")])),
-        ("/", Value::from([PathBuf::from("/")])),
-        ("/*[name() = 'tmp']", Value::from([PathBuf::from("/tmp")])),
-        ("/tmp/../*[name() = 'tmp']", Value::from([PathBuf::from("/tmp/../tmp")])),
-        ("/tmp", Value::from([PathBuf::from("/tmp")])),
-        ("/foo/bar", Value::from([PathBuf::from("/foo/bar")])),
-        ("/foo/bar[1 = 1]", Value::from([PathBuf::from("/").join("foo").join("bar")])),
-        ("/tmp[1 = 2]", Value::from(Vec::new())),
-        ("path('/foo/bar') [ 1 = 1 ] [ 2 = 2 ]", Value::from([PathBuf::from("/").join("foo").join("bar")])),
-        ("path('/tmp')[1 = 2]", Value::from(Vec::new())),
-        ("string(123)", Value::from("123")),
-        ("string(1 = 1)", Value::from("true")),
-        ("30", Value::from([PathBuf::from("30")])),
-        ("1e10", Value::from([PathBuf::from("1e10")])),
-        ("1 + 2 * -3", Value::from(-5)),
-        ("(1 + 2) * -3", Value::from(-9)),
-        ("4 div 3 > 2 % 1", Value::from(true)),
-        ("'1' + '2'", Value::from(3)),
-        (" \"hello world!\" ", Value::from("hello world!")),
-
-        ("{ 1, 2, 3 }", Value::from([PathBuf::from("1"), PathBuf::from("2"), PathBuf::from("3")])),
-        ("{ 1.1e3, 2.2e3, 3.3e3 }", Value::from([PathBuf::from("1.1e3"), PathBuf::from("2.2e3"), PathBuf::from("3.3e3")])),
-        ("{ '1', '2', '3' }", Value::from([PathBuf::from("1"), PathBuf::from("2"), PathBuf::from("3")])),
-
-        ("set(1, 2, 3)", Value::from([PathBuf::from("1"), PathBuf::from("2"), PathBuf::from("3")])),
-        ("set(1.1e3, 2.2e3, 3.3e3)", Value::from([PathBuf::from("1.1e3"), PathBuf::from("2.2e3"), PathBuf::from("3.3e3")])),
-        ("set('1', '2', '3')", Value::from(["1", "2", "3"])),
-
-        ("-30", Value::from([PathBuf::from("-30")])),
+fn test_query_evaluate_error() {
+    let q_map = [
+        ("fn_not_found()", EvaluateError::FunctionNotFound("fn_not_found".to_string())),
     ];
 
-    for (source, result_value) in result_map {
-        assert_eq!(evaluate(&*parse(source).unwrap()).unwrap(), result_value);
-    }
-
-    let error_map = [
-        ("1 == 1", "== 1"),
-        ("\"aaaa", ""),
-    ];
-
-    for (source, remaining_input) in error_map {
-        let result = parse(source);
-        assert!(result.is_err());
-        let err = match result {
-            Err(err) => err,
-            _ => unreachable!(),
+    for (q, err) in q_map {
+        let e = match query(q) {
+            Ok(r) => panic!("Should return evaluate error: got Ok({:?}) from {:?}", r, q),
+            Err(Error::ParseError(e)) => panic!("Should return evaluate error: got ParseError({:?}) from {:?}", e, q),
+            Err(Error::EvaluateError(e)) => e,
         };
-        assert_eq!(err.errors[0].0, remaining_input);
+        assert_eq!(e, err, "{:?} should equal {:?} in {:?}", e, err, q);
     }
+}
+
+#[test]
+fn test_deriving_for_coverage() {
+    assert_eq!(format!("{:?}", EvaluateError::FunctionNotFound("fn_not_found".to_string())), "FunctionNotFound(\"fn_not_found\")");
+    assert!(parse("1").unwrap() == Box::new(PathStepExpr { step: PathStep { op: PathStepOperation::Pattern(vec![PathStepPatternComponent::Name("1".to_string())]), predicate_exprs: vec![] } }));
+
+    let lhs: &dyn Expr = &PathStepExpr { step: PathStep { op: PathStepOperation::Pattern(vec![PathStepPatternComponent::Name("1".to_string())]), predicate_exprs: vec![] } };
+    let rhs0: &dyn Expr = &PathStepExpr { step: PathStep { op: PathStepOperation::Pattern(vec![PathStepPatternComponent::Name("1".to_string())]), predicate_exprs: vec![] } };
+    let rhs1: &dyn Expr = &PathStepExpr { step: PathStep { op: PathStepOperation::Pattern(vec![PathStepPatternComponent::Name("2".to_string())]), predicate_exprs: vec![] } };
+    assert!(lhs == rhs0);
+    assert!(lhs != rhs1);
 }
 

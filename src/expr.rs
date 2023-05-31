@@ -24,6 +24,7 @@ use std::{
     io,
     fs,
     path,
+    any::Any,
     path::{
         Path,
         PathBuf,
@@ -64,10 +65,9 @@ use nom::{
 use dirs::home_dir;
 
 pub struct EvaluationContext <'a> {
-    pub(crate) parent: Option<Box<&'a EvaluationContext<'a>>>,
-    pub(crate) fn_map: HashMap<String, fn(&EvaluationContext, &[Value]) -> Value>,
-    pub(crate) var_map: HashMap<String, Value>,
-    pub(crate) context_value: Value,
+    pub parent: Option<Box<&'a EvaluationContext<'a>>>,
+    pub fn_map: HashMap<String, fn(&EvaluationContext, &[Value]) -> Value>,
+    pub context_value: Value,
 }
 
 impl<'a> EvaluationContext <'a> {
@@ -75,31 +75,45 @@ impl<'a> EvaluationContext <'a> {
         let mut ctx = EvaluationContext {
             parent: None,
             fn_map: HashMap::new(),
-            var_map: HashMap::new(),
             context_value: context_value,
         };
+
+        fn fix_first_arg<'a>(ctx: &'a EvaluationContext, vs: &'a [Value]) -> (&'a Value, &'a [Value]) {
+            if vs.len() < 1 {
+                (ctx.get_context_value(), vs)
+            } else {
+                (&vs[0], &vs[1..])
+            }
+        }
+
         ctx.register_function("string", |ctx, vs| {
-            let ref_value = if vs.len() < 1 { ctx.get_context_value() } else { &vs[0] };
-            ref_value.clone().as_string()
+            let (value, _) = fix_first_arg(ctx, vs);
+            value.clone().as_string()
         });
         ctx.register_function("number", |ctx, vs| {
-            let ref_value = if vs.len() < 1 { ctx.get_context_value() } else { &vs[0] };
-            ref_value.clone().as_number()
+            let (value, _) = fix_first_arg(ctx, vs);
+            value.clone().as_number()
         });
         ctx.register_function("boolean", |ctx, vs| {
-            let ref_value = if vs.len() < 1 { ctx.get_context_value() } else { &vs[0] };
-            ref_value.clone().as_boolean()
+            let (value, _) = fix_first_arg(ctx, vs);
+            value.clone().as_boolean()
         });
         ctx.register_function("path", |ctx, vs| {
-            let ref_value = if vs.len() < 1 { ctx.get_context_value() } else { &vs[0] };
-            ref_value.clone().as_path()
+            let (value, _) = fix_first_arg(ctx, vs);
+            value.clone().as_path()
         });
         ctx.register_function("set", |_, vs| {
             Value::from(vs)
         });
+        ctx.register_function("true", |_, _| {
+            Value::from(true)
+        });
+        ctx.register_function("false", |_, _| {
+            Value::from(false)
+        });
         ctx.register_function("name", |ctx, vs| {
-            let ref_value = if vs.len() < 1 { ctx.get_context_value() } else { &vs[0] };
-            let path: PathBuf = ref_value.into();
+            let (value, _) = fix_first_arg(ctx, vs);
+            let path: PathBuf = value.into();
             match path.file_name() {
                 Some(os_name) => Value::from(os_name.to_string_lossy().into_owned()), // TODO String should be
                                                                                       // contains OsString
@@ -107,12 +121,14 @@ impl<'a> EvaluationContext <'a> {
             }
         });
         ctx.register_function("dir", |ctx, vs| {
-            let ref_value = if vs.len() < 1 { ctx.get_context_value() } else { &vs[0] };
-            let path: PathBuf = ref_value.into();
+            let (value, _) = fix_first_arg(ctx, vs);
+            let path: PathBuf = value.into();
             match path.parent() {
-                Some(os_name) => Value::from(os_name.to_string_lossy().into_owned()), // TODO String should be
-                                                                                      // contains OsString
-                None => Value::from(""),
+                Some(dir) => {
+                    let dir: PathBuf = dir.into();
+                    Value::from(dir)
+                },
+                None => Value::from(PathBuf::from("")),
             }
         });
         ctx
@@ -132,20 +148,6 @@ impl<'a> EvaluationContext <'a> {
         }
     }
 
-    pub fn set_variable(&mut self, key: impl AsRef<str>, value: Value) {
-        self.var_map.insert(key.as_ref().to_string(), value);
-    }
-
-    pub fn get_variable(&self, key: impl AsRef<str>) -> Option<&Value> {
-        match self.var_map.get(key.as_ref()) {
-            Some(variable) => Some(variable),
-            None => match &self.parent {
-                Some(parent) => parent.get_variable(key),
-                None => None,
-            },
-        }
-    }
-
     pub fn get_context_value(&self) -> &Value {
         &self.context_value
     }
@@ -157,26 +159,39 @@ impl<'a> EvaluationContext <'a> {
         Self {
             parent: Some(Box::new(self)),
             fn_map: HashMap::new(),
-            var_map: HashMap::new(),
             context_value: Value::from(parent_dir.join(context_dir)),
         }
     }
 }
 
 #[derive(Debug, Eq, PartialEq)]
-pub enum Error {
+pub enum EvaluateError {
     FunctionNotFound(String),
     CouldntReadDir(io::ErrorKind, String),
 }
 
-pub trait Expr: Debug {
-    fn evaluate(&self, ctx: &EvaluationContext) -> Result<Value, Error>;
+pub trait Expr: Debug + Any {
+    fn evaluate(&self, ctx: &EvaluationContext) -> Result<Value, EvaluateError>;
+    fn as_any(&self) -> &dyn Any;
+    fn eq(&self, rhs: &dyn Any) -> bool;
 }
 
 impl PartialEq for dyn Expr {
-    fn eq(&self, _: &dyn Expr) -> bool {
-        unreachable!()
+    fn eq(&self, rhs: &dyn Expr) -> bool {
+        Expr::eq(self, rhs.as_any())
     }
+}
+
+macro_rules! expr_eq {
+    () => (
+        fn as_any(&self) -> &dyn Any {
+            self
+        }
+
+        fn eq(&self, rhs: &dyn Any) -> bool {
+            rhs.downcast_ref::<Self>().map_or(false, |rhs| self == rhs)
+        }
+    );
 }
 
 pub fn parse(i: &str) -> ParseResult<Box<dyn Expr>> {
@@ -219,7 +234,7 @@ pub fn parse_enclosed_expr<T>(open_bracket: char, close_bracket: char, i: &str, 
 
 #[derive(Debug, PartialEq)]
 pub struct FilterExpr {
-    exprs: Vec<Box<dyn Expr>>,
+    pub exprs: Vec<Box<dyn Expr>>,
 }
 
 impl FilterExpr {
@@ -238,7 +253,7 @@ impl FilterExpr {
 }
 
 impl Expr for FilterExpr {
-    fn evaluate(&self, ctx: &EvaluationContext) -> Result<Value, Error> {
+    fn evaluate(&self, ctx: &EvaluationContext) -> Result<Value, EvaluateError> {
         let mut values = ctx.get_context_value().clone();
         for expr in &self.exprs {
             let mut value_vec = Vec::new();
@@ -251,12 +266,14 @@ impl Expr for FilterExpr {
         }
         Ok(Value::from(values))
     }
+
+    expr_eq!();
 }
 
 #[derive(Debug)]
 pub struct PathExpr {
-    root_expr: Box<dyn Expr>,
-    steps: Vec<PathStep>,
+    pub root_expr: Box<dyn Expr>,
+    pub steps: Vec<PathStep>,
 }
 
 impl PathExpr {
@@ -280,13 +297,15 @@ impl PathExpr {
 }
 
 impl Expr for PathExpr {
-    fn evaluate(&self, ctx: &EvaluationContext) -> Result<Value, Error> {
+    fn evaluate(&self, ctx: &EvaluationContext) -> Result<Value, EvaluateError> {
         let mut value = self.root_expr.evaluate(ctx)?;
         for step in &self.steps {
             value = step.evaluate(&ctx, &value)?;
         };
         return Ok(value)
     }
+
+    expr_eq!();
 }
 
 impl PartialEq for PathExpr {
@@ -297,7 +316,7 @@ impl PartialEq for PathExpr {
 
 #[derive(Debug)]
 pub struct PathRootExpr {
-    expr: Box<dyn Expr>,
+    pub expr: Box<dyn Expr>,
     predicate_exprs: Vec<Box<dyn Expr>>,
 }
 
@@ -325,10 +344,12 @@ impl PathRootExpr {
 }
 
 impl Expr for PathRootExpr {
-    fn evaluate(&self, ctx: &EvaluationContext) -> Result<Value, Error> {
+    fn evaluate(&self, ctx: &EvaluationContext) -> Result<Value, EvaluateError> {
         let value = self.expr.evaluate(ctx)?;
         PathStep::evaluate_predicates(ctx, &self.predicate_exprs, value)
     }
+
+    expr_eq!();
 }
 
 impl PartialEq for PathRootExpr {
@@ -339,19 +360,21 @@ impl PartialEq for PathRootExpr {
 
 #[derive(Debug, PartialEq)]
 pub struct PathStepExpr {
-    step: PathStep,
+    pub step: PathStep,
 }
 
 impl Expr for PathStepExpr {
-    fn evaluate(&self, ctx: &EvaluationContext) -> Result<Value, Error> {
+    fn evaluate(&self, ctx: &EvaluationContext) -> Result<Value, EvaluateError> {
         self.step.evaluate(&ctx, &Value::from(""))
     }
+
+    expr_eq!();
 }
 
 #[derive(Debug)]
 pub struct PathStep {
-    op: PathStepOperation,
-    predicate_exprs: Vec<Box<dyn Expr>>,
+    pub op: PathStepOperation,
+    pub predicate_exprs: Vec<Box<dyn Expr>>,
 }
 
 impl PathStep {
@@ -438,7 +461,7 @@ impl PathStep {
         Ok((next_i, predicate_exprs))
     }
 
-    fn evaluate_predicates(ctx: &EvaluationContext, predicate_exprs: &Vec<Box<dyn Expr>>, value: Value) -> Result<Value, Error> {
+    fn evaluate_predicates(ctx: &EvaluationContext, predicate_exprs: &Vec<Box<dyn Expr>>, value: Value) -> Result<Value, EvaluateError> {
         let mut next_value = value;
         for predicate_expr in predicate_exprs {
             let value = next_value;
@@ -457,7 +480,7 @@ impl PathStep {
         Ok(next_value)
     }
 
-    fn evaluate(&self, ctx: &EvaluationContext, value: &Value) -> Result<Value, Error> {
+    fn evaluate(&self, ctx: &EvaluationContext, value: &Value) -> Result<Value, EvaluateError> {
         let value = self.op.evaluate(ctx, value)?;
         Self::evaluate_predicates(ctx, &self.predicate_exprs, value)
     }
@@ -470,27 +493,27 @@ impl PartialEq for PathStep {
 }
 
 #[derive(Debug, PartialEq)]
-enum PathStepOperation {
+pub enum PathStepOperation {
     Recursive,
     Pattern(Vec<PathStepPatternComponent>),
 }
 
 #[derive(Debug, PartialEq)]
-enum PathStepPatternComponent {
+pub enum PathStepPatternComponent {
     Name(String),
     Regex(String),
     Exprs(Vec<Box<dyn Expr>>),
 }
 
 impl PathStepOperation {
-    fn evaluate(&self, ctx: &EvaluationContext, value: &Value) -> Result<Value, Error> {
+    fn evaluate(&self, ctx: &EvaluationContext, value: &Value) -> Result<Value, EvaluateError> {
         match self {
             Self::Recursive => Self::evaluate_recursive(value),
             Self::Pattern(components) => Self::evaluate_pattern(components, ctx, value),
         }
     }
 
-    fn evaluate_recursive(values: &Value) -> Result<Value, Error> {
+    fn evaluate_recursive(values: &Value) -> Result<Value, EvaluateError> {
         let mut result_path_values = BTreeSet::new();
         for value in values {
             let path: PathBuf = value.into();
@@ -502,11 +525,11 @@ impl PathStepOperation {
         Ok(Value::Set(result_path_values, PathExistence::Checked))
     }
 
-    fn get_descendant_path_values(dir: impl AsRef<Path>, result_path_values: &mut BTreeSet<RealValue>) -> Result<(), Error> {
+    fn get_descendant_path_values(dir: impl AsRef<Path>, result_path_values: &mut BTreeSet<RealValue>) -> Result<(), EvaluateError> {
         let dir = dir.as_ref();
-        let dir_entries = read_dir(dir).map_err(|e| Error::CouldntReadDir(e.kind(), e.to_string()))?;
+        let dir_entries = read_dir(dir).map_err(|e| EvaluateError::CouldntReadDir(e.kind(), e.to_string()))?;
         for dir_entry in dir_entries {
-            let dir_entry = dir_entry.map_err(|e| Error::CouldntReadDir(e.kind(), e.to_string()))?;
+            let dir_entry = dir_entry.map_err(|e| EvaluateError::CouldntReadDir(e.kind(), e.to_string()))?;
             let path = dir.join(dir_entry.file_name());
             if is_dir(&path) {
                 Self::get_descendant_path_values(&path, result_path_values)?;
@@ -516,7 +539,7 @@ impl PathStepOperation {
         Ok(())
     }
 
-    fn evaluate_pattern(components: &Vec<PathStepPatternComponent>, ctx: &EvaluationContext, values: &Value) -> Result<Value, Error> {
+    fn evaluate_pattern(components: &Vec<PathStepPatternComponent>, ctx: &EvaluationContext, values: &Value) -> Result<Value, EvaluateError> {
         use PathStepPatternComponent as Comp;
         use PathExistence::*;
         let path_existence = match values.path_existence() {
@@ -579,9 +602,9 @@ impl PathStepOperation {
                     regex_str.push_str("$");
                     let regex = Regex::new(&regex_str).unwrap();
                     if is_dir(&context_dir) {
-                        let dir_entries = read_dir(&context_dir).map_err(|e| Error::CouldntReadDir(e.kind(), e.to_string()))?;
+                        let dir_entries = read_dir(&context_dir).map_err(|e| EvaluateError::CouldntReadDir(e.kind(), e.to_string()))?;
                         for dir_entry in dir_entries {
-                            let dir_entry = dir_entry.map_err(|e| Error::CouldntReadDir(e.kind(), e.to_string()))?;
+                            let dir_entry = dir_entry.map_err(|e| EvaluateError::CouldntReadDir(e.kind(), e.to_string()))?;
                             let filename = dir_entry.file_name().to_string_lossy().into_owned();
                             if regex.is_match(&filename) {
                                 let path = PathBuf::from(filename);
@@ -630,7 +653,7 @@ impl PathStepOperation {
 
 #[derive(Debug, Eq, PartialEq)]
 pub struct LiteralRootPath {
-    path: PathBuf
+    pub path: PathBuf
 }
 
 impl LiteralRootPath {
@@ -674,14 +697,16 @@ impl LiteralRootPath {
 }
 
 impl Expr for LiteralRootPath {
-    fn evaluate(&self, _: &EvaluationContext) -> Result<Value, Error> {
+    fn evaluate(&self, _: &EvaluationContext) -> Result<Value, EvaluateError> {
         Ok(Value::from([self.path.clone()]))
     }
+
+    expr_eq!();
 }
 
 #[derive(Debug, PartialEq)]
 pub struct FunctionCall {
-    identifier: String,
+    pub identifier: String,
     arg_exprs: Vec<Box<dyn Expr>>,
 }
 
@@ -700,10 +725,9 @@ impl FunctionCall {
 }
 
 impl Expr for FunctionCall {
-    fn evaluate(&self, ctx: &EvaluationContext) -> Result<Value, Error> {
-        let function = match ctx.get_function(&self.identifier) {
-            Some(function) => function,
-            None => return Err(Error::FunctionNotFound(self.identifier.clone())),
+    fn evaluate(&self, ctx: &EvaluationContext) -> Result<Value, EvaluateError> {
+        let Some(function) = ctx.get_function(&self.identifier) else {
+            return Err(EvaluateError::FunctionNotFound(self.identifier.clone()));
         };
         let mut arg_values: Vec<Value> = Vec::new();
         for expr in &self.arg_exprs {
@@ -713,11 +737,13 @@ impl Expr for FunctionCall {
         let return_value = function(ctx, &arg_values);
         Ok(return_value)
     }
+
+    expr_eq!();
 }
 
 #[derive(Debug, Eq, PartialEq)]
 pub struct LiteralString {
-    string: String,
+    pub string: String,
 }
 
 impl LiteralString {
@@ -732,16 +758,18 @@ impl LiteralString {
 }
 
 impl Expr for LiteralString {
-    fn evaluate(&self, _: &EvaluationContext) -> Result<Value, Error> {
+    fn evaluate(&self, _: &EvaluationContext) -> Result<Value, EvaluateError> {
         Ok(Value::from(self.string.clone()))
     }
+
+    expr_eq!();
 }
 
 #[derive(Debug)]
 pub struct BinaryExpr {
-    op: BinaryOperator,
-    left_expr: Box<dyn Expr>,
-    right_expr: Box<dyn Expr>,
+    pub op: BinaryOperator,
+    pub left_expr: Box<dyn Expr>,
+    pub right_expr: Box<dyn Expr>,
 }
 
 impl BinaryExpr {
@@ -801,9 +829,11 @@ impl BinaryExpr {
 }
 
 impl Expr for BinaryExpr {
-    fn evaluate(&self, ctx: &EvaluationContext) -> Result<Value, Error> {
+    fn evaluate(&self, ctx: &EvaluationContext) -> Result<Value, EvaluateError> {
         Ok(self.op.evaluate(&self.left_expr.evaluate(ctx)?, &self.right_expr.evaluate(ctx)?))
     }
+
+    expr_eq!();
 }
 
 impl PartialEq for BinaryExpr {

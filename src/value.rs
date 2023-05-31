@@ -116,7 +116,7 @@ impl Value {
             _ => Value::from([self.clone()]),
         }
     }
-    
+
     pub fn path_existence(&self) -> PathExistence {
         match self {
             Value::Set(_, existence) => *existence,
@@ -140,15 +140,14 @@ impl Into<bool> for Value {
 impl Into<bool> for &Value {
     fn into(self) -> bool {
         match self {
-            Value::Number(number) => {
-                match number {
-                    Number::Float(f) => !f.is_nan() && *f != 0.0,
-                    Number::Integer(i) => *i != 0,
-                }
-            },
+            Value::Number(number) => convert_number_to_boolean(*number),
             Value::Boolean(boolean) => *boolean,
             Value::String(string) => 0 < string.len(),
-            Value::Path(_) => true,
+            Value::Path(path) => {
+                let string = convert_path_to_string(path);
+                let number = convert_string_to_number(&string);
+                convert_number_to_boolean(number)
+            },
             Value::Set(set, _) => 0 < set.len(),
         }
     }
@@ -171,25 +170,12 @@ impl Into<Number> for &Value {
         match self {
             Value::Number(number) => *number,
             Value::Boolean(boolean) => if *boolean { Number::from(1) } else { Number::from(0) },
-            Value::String(string) => match string.parse::<f64>() {
-                Ok(number) => Number::from(number),
-                Err(_) => Number::from(f64::NAN),
-            },
+            Value::String(string) => convert_string_to_number(string),
             Value::Path(path) => {
-                let string: String = path.to_string_lossy().into_owned();
-                match string.parse::<f64>() {
-                    Ok(number) => Number::from(number),
-                    Err(_) => Number::from(f64::NAN),
-                }
+                let string = convert_path_to_string(path);
+                convert_string_to_number(&string)
             },
-            Value::Set(set, _) => match set.iter().cloned().next() {
-                Some(real_value) => {
-                    let value: Value = real_value.into();
-                    let number: Number = value.into();
-                    number
-                },
-                None => Number::from(f64::NAN),
-            },
+            Value::Set(set, _) => convert_set_to_single_value(set).map_or(Number::from(f64::NAN), |v| v.into()),
         }
     }
 }
@@ -240,16 +226,7 @@ impl Into<String> for &Value {
             Value::String(string) => string.clone(),
             Value::Path(path) => path.to_string_lossy().into_owned(), // TODO String should be
                                                                       // contains OsString
-            Value::Set(values, _) => {
-                match values.iter().cloned().next() {
-                    Some(real_value) => {
-                        let value: Value = real_value.into();
-                        let string: String = value.into();
-                        string
-                    },
-                    None => String::from(""),
-                }
-            },
+            Value::Set(set, _) => convert_set_to_single_value(set).map_or(String::from(""), |v| v.into()),
         }
     }
 }
@@ -297,16 +274,7 @@ impl Into<PathBuf> for &Value {
             Value::Boolean(boolean) => PathBuf::from(boolean.to_string()),
             Value::String(string) => PathBuf::from(string),
             Value::Path(path) => path.clone(),
-            Value::Set(values, _) => {
-                match values.iter().cloned().next() {
-                    Some(real_value) => {
-                        let value: Value = real_value.into();
-                        let path: PathBuf = value.into();
-                        path
-                    },
-                    None => PathBuf::from("."),
-                }
-            },
+            Value::Set(set, _) => convert_set_to_single_value(set).map_or(PathBuf::from(""), |v| v.into()),
         }
     }
 }
@@ -419,6 +387,28 @@ impl<'a> IntoIterator for &'a Value {
             Value::Set(set, _) => ValueIterator::SetIterator(set.iter()),
             _ => return ValueIterator::SingleIterator(self, false),
         }
+    }
+}
+
+fn convert_set_to_single_value(set: &BTreeSet<RealValue>) -> Option<Value> {
+    Some(set.iter().cloned().next()?.into())
+}
+
+fn convert_path_to_string(path: &PathBuf) -> String {
+    path.to_string_lossy().into_owned()
+}
+
+fn convert_string_to_number(string: &String) -> Number {
+    match string.parse::<f64>() {
+        Ok(number) => Number::from(number),
+        Err(_) => Number::from(f64::NAN),
+    }
+}
+
+fn convert_number_to_boolean(number: Number) -> bool {
+    match number {
+        Number::Float(f) => !f.is_nan() && f != 0.0,
+        Number::Integer(i) => i != 0,
     }
 }
 

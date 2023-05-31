@@ -4,37 +4,36 @@ mod value;
 mod expr;
 
 use std::path::PathBuf;
-use parse_util::parse_eof;
+
+use parse_util::{
+    parse_eof,
+    ParseResult,
+};
 
 pub use primitive::{
     Number,
     RealNumber,
 };
+
 pub use value::{
     Value,
     RealValue,
 };
-pub use expr::{
-    EvaluationContext,
-    Error,
-    Expr,
-    FilterExpr,
-    LiteralString,
-    BinaryExpr,
-    BinaryOperator,
-    PathExpr,
-    PathRootExpr,
-    PathStepExpr,
-    LiteralRootPath,
-};
+
+pub use expr::*;
 
 use nom::{
-    IResult,
     Err,
     error::VerboseError,
 };
 
-fn parse_root(i: &str) -> IResult<&str, Box<dyn Expr>, VerboseError<&str>> {
+#[derive(Debug, PartialEq)]
+pub enum Error<'a> {
+    ParseError(VerboseError<&'a str>),
+    EvaluateError(EvaluateError),
+}
+
+fn parse_root(i: &str) -> ParseResult<Box<dyn Expr>> {
     let (i, expr) = expr::parse(i)?;
     let (i, _) = parse_eof(i)?;
     Ok((i, expr))
@@ -48,8 +47,21 @@ pub fn parse(i: &str) -> Result<Box<dyn Expr>, VerboseError<&str>> {
     }
 }
 
-pub fn evaluate(expr: &dyn Expr) -> Result<Value, Error> {
+pub fn evaluate(expr: &dyn Expr) -> Result<Value, EvaluateError> {
     let ctx = EvaluationContext::new(Value::from(PathBuf::from("")));
     expr.evaluate(&ctx)
+}
+
+pub fn query(i: &str) -> Result<Vec<PathBuf>, Error> {
+    let expr = parse(i).map_err(|e| Error::ParseError(e))?;
+    let values = evaluate(&*expr).map_err(|e| Error::EvaluateError(e))?;
+
+    let mut paths = Vec::new();
+    for value in &values {
+        let path: PathBuf = value.into();
+        paths.push(path);
+    };
+
+    Ok(paths)
 }
 
