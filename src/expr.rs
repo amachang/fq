@@ -59,10 +59,25 @@ use nom::{
     error::{
         ParseError,
         ErrorKind,
+        VerboseError,
     },
 };
 
 use dirs::home_dir;
+
+trait WrapFailure<'a, O> {
+   fn wrap_failure(self) -> Result<Result<(&'a str, O), VerboseError<&'a str>>, nom::Err<VerboseError<&'a str>>>;
+}
+
+impl<'a, O> WrapFailure<'a, O> for ParseResult<'a, O> {
+   fn wrap_failure(self) -> Result<Result<(&'a str, O), VerboseError<&'a str>>, nom::Err<VerboseError<&'a str>>> {
+       match self {
+           Ok(r) => Ok(Ok(r)),
+           Err(Err::Error(err)) => Ok(Err(err)),
+           Err(e) => Err(e),
+       }
+   }
+}
 
 pub struct EvaluationContext <'a> {
     pub parent: Option<Box<&'a EvaluationContext<'a>>>,
@@ -203,18 +218,14 @@ pub fn parse_expr_list<'a, T>(delimiter: &'static str, i: &'a str, parse: fn(i: 
     let mut next_i = i;
     loop {
         let i = next_i;
-        let (i, expr) = match parse(i) {
-            Ok(r) => r,
-            Err(Err::Error(_)) => break,
-            Err(e) => return Err(e),
+        let Ok((i, expr)) = parse(i).wrap_failure()? else {
+            break
         };
         next_i = i;
         exprs.push(expr);
 
-        let (i, _) = match preceded(parse_space, tag(delimiter))(i) {
-            Ok(r) => r,
-            Err(Err::Error(_)) => break,
-            Err(e) => return Err(e),
+        let Ok((i, _)) = preceded(parse_space, tag(delimiter))(i).wrap_failure()? else {
+            break
         };
         next_i = i
     };
@@ -223,11 +234,7 @@ pub fn parse_expr_list<'a, T>(delimiter: &'static str, i: &'a str, parse: fn(i: 
 
 pub fn parse_enclosed_expr<T>(open_bracket: char, close_bracket: char, i: &str, parse: fn(i: &str) -> ParseResult<T>) -> ParseResult<T> {
     let (i, _) = preceded(parse_space, char(open_bracket))(i)?;
-    let (i, expr) = match parse(i) {
-        Ok(r) => r,
-        Err(Err::Error(e)) => return Err(Err::Failure(e)),
-        Err(e) => return Err(e),
-    };
+    let (i, expr) = cut(parse)(i)?;
     let (i, _) = cut(preceded(parse_space, char(close_bracket)))(i)?;
     Ok((i, expr))
 }
@@ -278,18 +285,16 @@ pub struct PathExpr {
 
 impl PathExpr {
     pub fn parse(i: &str) -> ParseResult<Box<dyn Expr>> {
-        let (i, root_expr) = match LiteralRootPath::parse_separator_like_root_path(i) {
+        let (i, root_expr) = match LiteralRootPath::parse_separator_like_root_path(i).wrap_failure()? {
             Ok(r) => r,
-            Err(Err::Error(_)) => {
+            Err(_) => {
                 let (i, root_expr) = PathRootExpr::parse(i)?;
-                let i = match preceded(parse_space, tag(path::MAIN_SEPARATOR_STR))(i) {
+                let i = match preceded(parse_space, tag(path::MAIN_SEPARATOR_STR))(i).wrap_failure()? {
                     Ok((i, _)) => i,
-                    Err(Err::Error(_)) => return Ok((i, root_expr)),
-                    Err(e) => return Err(e),
+                    Err(_) => return Ok((i, root_expr)),
                 };
                 (i, root_expr)
             },
-            Err(e) => return Err(e),
         };
         let (i, steps) = parse_expr_list(path::MAIN_SEPARATOR_STR, i, PathStep::parse)?;
         Ok((i, Box::new(PathExpr { root_expr, steps })))
@@ -381,14 +386,10 @@ impl PathStep {
     pub fn parse(i: &str) -> ParseResult<PathStep> {
         let (i, _) = parse_space(i)?;
 
-        match tag("**")(i) {
-            Ok((i, _)) => {
-                let op = PathStepOperation::Recursive;
-                let (i, predicate_exprs) = PathStep::parse_predicates(i)?;
-                return Ok((i, PathStep { op, predicate_exprs }));
-            },
-            Err(Err::Error(_)) => (),
-            Err(e) => return Err(e),
+        if let Ok((i, _)) = tag("**")(i).wrap_failure()? {
+            let op = PathStepOperation::Recursive;
+            let (i, predicate_exprs) = PathStep::parse_predicates(i)?;
+            return Ok((i, PathStep { op, predicate_exprs }));
         };
 
         let mut components: Vec<PathStepPatternComponent> = Vec::new();
@@ -396,16 +397,12 @@ impl PathStep {
         loop {
             let i = next_i;
 
-            match tag("**")(i) {
-                Ok((i, _)) => return Err(Err::Error(ParseError::from_error_kind(i, ErrorKind::Tag))),
-                Err(Err::Error(_)) => (),
-                Err(e) => return Err(e),
+            if let Ok((i, _)) = tag("**")(i).wrap_failure()? {
+                return Err(Err::Error(ParseError::from_error_kind(i, ErrorKind::Tag)));
             };
 
-            let (i, component) = match Self::parse_component(i) {
-                Ok(r) => r,
-                Err(Err::Error(_)) => break,
-                Err(e) => return Err(e),
+            let Ok((i, component)) = Self::parse_component(i).wrap_failure()? else {
+                break
             };
 
             components.push(component);
@@ -450,10 +447,8 @@ impl PathStep {
         let mut next_i = i;
         loop {
             let i = next_i;
-            let (i, predicate_expr) = match parse_enclosed_expr('[', ']', i, FilterExpr::parse) {
-                Ok(r) => r,
-                Err(Err::Error(_)) => break,
-                Err(e) => return Err(e),
+            let Ok((i, predicate_expr)) = parse_enclosed_expr('[', ']', i, FilterExpr::parse).wrap_failure()? else {
+                break
             };
             predicate_exprs.push(predicate_expr);
             next_i = i
@@ -778,20 +773,17 @@ impl BinaryExpr {
         let mut current_i = i;
         let (i, expr) = loop {
             let i = current_i;
-            let (before_op_i, new_expr) = match PathExpr::parse(i) {
+            let (before_op_i, new_expr) = match PathExpr::parse(i).wrap_failure()? {
                 Ok(r) => r,
-                Err(Err::Error(err)) => {
+                Err(err) => {
                     match stack.pop() {
                         Some((i, _, expr)) => break (i, expr),
                         None => return Err(Err::Error(err)),
                     }
                 },
-                Err(e) => return Err(e),
             };
-            let (after_op_i, new_op) = match BinaryOperator::parse(before_op_i) {
-                Ok(r) => r,
-                Err(Err::Error(_)) => break (before_op_i, new_expr),
-                Err(e) => return Err(e),
+            let Ok((after_op_i, new_op)) = BinaryOperator::parse(before_op_i).wrap_failure()? else {
+                break (before_op_i, new_expr)
             };
 
             let mut expr = new_expr;
@@ -893,10 +885,8 @@ impl BinaryOperator {
         ];
 
         for (op_str, op) in op_map {
-            match preceded(parse_space, tag(op_str))(i) {
-                Ok((i, _)) => return Ok((i, op)),
-                Err(Err::Error(_)) => (),
-                Err(e) => return Err(e),
+            if let Ok((i, _)) = preceded(parse_space, tag(op_str))(i).wrap_failure()? {
+                return Ok((i, op))
             };
         }
 
