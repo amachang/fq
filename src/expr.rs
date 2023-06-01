@@ -50,6 +50,7 @@ use nom::{
         preceded,
         pair,
         terminated,
+        delimited,
     },
     branch::alt,
     combinator::{
@@ -200,13 +201,6 @@ pub fn parse(i: &str) -> ParseResult<Box<dyn Expr>> {
     FilterExpr::parse(i)
 }
 
-pub fn parse_enclosed_expr<'a, T>(open_bracket: char, close_bracket: char, i: &'a str, parse: impl FnMut(&'a str) -> ParseResult<T>) -> ParseResult<T> {
-    let (i, _) = preceded(parse_space, char(open_bracket))(i)?;
-    let (i, expr) = cut(parse)(i)?;
-    let (i, _) = cut(preceded(parse_space, char(close_bracket)))(i)?;
-    Ok((i, expr))
-}
-
 #[derive(Debug, PartialEq)]
 pub struct FilterExpr {
     pub exprs: Vec<Box<dyn Expr>>,
@@ -296,7 +290,11 @@ pub struct PathRootExpr {
 impl PathRootExpr {
     pub fn parse(i: &str) -> ParseResult<Box<dyn Expr>> {
         let (i, expr) = alt((
-                |i| parse_enclosed_expr('(', ')', i, FilterExpr::parse),
+                delimited(
+                    preceded(parse_space, char('(')),
+                    cut(FilterExpr::parse),
+                    cut(preceded(parse_space, char(')'))),
+                    ),
                 LiteralString::parse,
                 FunctionCall::parse,
                 LiteralRootPath::parse,
@@ -406,7 +404,11 @@ impl PathStep {
     }
 
     fn parse_exprs_component(i: &str) -> ParseResult<PathStepPatternComponent> {
-        let (i, exprs) = parse_enclosed_expr('{', '}', i, parse_list(preceded(parse_space, char(',')), FilterExpr::parse))?;
+        let (i, exprs) = delimited(
+            preceded(parse_space, char('{')),
+            cut(parse_list(preceded(parse_space, char(',')), FilterExpr::parse)),
+            cut(preceded(parse_space, char('}'))),
+        )(i)?;
         Ok((i, PathStepPatternComponent::Exprs(exprs)))
     }
 
@@ -415,7 +417,11 @@ impl PathStep {
         let mut next_i = i;
         loop {
             let i = next_i;
-            let Ok((i, predicate_expr)) = parse_enclosed_expr('[', ']', i, FilterExpr::parse).wrap_failure()? else {
+            let Ok((i, predicate_expr)) = delimited(
+                preceded(parse_space, char('[')),
+                cut(FilterExpr::parse),
+                cut(preceded(parse_space, char(']'))),
+            )(i).wrap_failure()? else {
                 break
             };
             predicate_exprs.push(predicate_expr);
@@ -680,7 +686,11 @@ impl FunctionCall {
             parse_identifier,
         )(i)?;
 
-        let (i, arg_exprs) = parse_enclosed_expr('(', ')', i, parse_list(preceded(parse_space, char(',')), FilterExpr::parse))?;
+        let (i, arg_exprs) = delimited(
+            preceded(parse_space, char('(')),
+            cut(parse_list(preceded(parse_space, char(',')), FilterExpr::parse)),
+            cut(preceded(parse_space, char(')'))),
+        )(i)?;
         let identifier = identifier.to_string();
 
         Ok((i, Box::new(FunctionCall { identifier, arg_exprs })))
