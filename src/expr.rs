@@ -2,7 +2,6 @@ use super::{
     parse_util::{
         parse_space,
         parse_identifier,
-        parse_list,
         ParseResult,
         ParseResultWrapper,
     },
@@ -57,7 +56,11 @@ use nom::{
         recognize,
         cut,
     },
-    multi::many1_count,
+    multi::{
+        separated_list0,
+        separated_list1,
+        many1_count,
+    },
     Err,
     error::{
         ParseError,
@@ -208,11 +211,9 @@ pub struct FilterExpr {
 
 impl FilterExpr {
     pub fn parse(i: &str) -> ParseResult<Box<dyn Expr>> {
-        let (i, exprs) = parse_list(preceded(parse_space, char('|')), BinaryExpr::parse)(i)?;
+        let (i, exprs) = separated_list1(preceded(parse_space, char('|')), BinaryExpr::parse)(i)?;
 
-        if 0 == exprs.len() {
-            Err(Err::Error(ParseError::from_error_kind(i, ErrorKind::Tag)))
-        } else if 1 == exprs.len() {
+        if 1 == exprs.len() {
             let expr = exprs.into_iter().next().unwrap();
             Ok((i, expr))
         } else {
@@ -258,7 +259,7 @@ impl PathExpr {
                 (i, root_expr)
             },
         };
-        let (i, steps) = parse_list(preceded(parse_space, tag(path::MAIN_SEPARATOR_STR)), PathStep::parse)(i)?;
+        let (i, steps) = separated_list0(preceded(parse_space, tag(path::MAIN_SEPARATOR_STR)), PathStep::parse)(i)?;
         Ok((i, Box::new(PathExpr { root_expr, steps })))
     }
 }
@@ -406,7 +407,7 @@ impl PathStep {
     fn parse_exprs_component(i: &str) -> ParseResult<PathStepPatternComponent> {
         let (i, exprs) = delimited(
             preceded(parse_space, char('{')),
-            cut(parse_list(preceded(parse_space, char(',')), FilterExpr::parse)),
+            cut(separated_list0(preceded(parse_space, char(',')), FilterExpr::parse)),
             cut(preceded(parse_space, char('}'))),
         )(i)?;
         Ok((i, PathStepPatternComponent::Exprs(exprs)))
@@ -688,7 +689,7 @@ impl FunctionCall {
 
         let (i, arg_exprs) = delimited(
             preceded(parse_space, char('(')),
-            cut(parse_list(preceded(parse_space, char(',')), FilterExpr::parse)),
+            cut(separated_list0(preceded(parse_space, char(',')), FilterExpr::parse)),
             cut(preceded(parse_space, char(')'))),
         )(i)?;
         let identifier = identifier.to_string();
