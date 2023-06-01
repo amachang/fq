@@ -8,6 +8,7 @@ use std::path::PathBuf;
 use parse_util::{
     parse_eof,
     ParseResult,
+    ParseResultWrapper,
 };
 
 pub use primitive::{
@@ -22,10 +23,7 @@ pub use value::{
 
 pub use expr::*;
 
-use nom::{
-    Err,
-    error::VerboseError,
-};
+use nom::error::VerboseError;
 
 #[derive(Debug, PartialEq)]
 pub enum Error<'a> {
@@ -40,11 +38,8 @@ fn parse_root(i: &str) -> ParseResult<Box<dyn Expr>> {
 }
 
 pub fn parse(i: &str) -> Result<Box<dyn Expr>, VerboseError<&str>> {
-    match parse_root(i) {
-        Ok((_, expr)) => Ok(expr),
-        Err(Err::Error(e)) | Err(Err::Failure(e)) => Err(e),
-        Err(Err::Incomplete(_)) => unreachable!(),
-    }
+    let (_, expr) = parse_root(i).unwrap_result()?;
+    Ok(expr)
 }
 
 pub fn evaluate(expr: &dyn Expr) -> Result<Value, EvaluateError> {

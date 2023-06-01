@@ -15,8 +15,32 @@ use nom::{
     },
     branch::alt,
     multi::many0_count,
+    Err,
     error::VerboseError,
 };
+
+pub trait ParseResultWrapper<'a, O> {
+   fn wrap_failure(self) -> Result<Result<(&'a str, O), VerboseError<&'a str>>, nom::Err<VerboseError<&'a str>>>;
+   fn unwrap_result(self) -> Result<(&'a str, O), VerboseError<&'a str>>;
+}
+
+impl<'a, O> ParseResultWrapper<'a, O> for ParseResult<'a, O> {
+   fn wrap_failure(self) -> Result<Result<(&'a str, O), VerboseError<&'a str>>, nom::Err<VerboseError<&'a str>>> {
+       match self {
+           Ok(r) => Ok(Ok(r)),
+           Err(Err::Error(err)) => Ok(Err(err)),
+           Err(e) => Err(e),
+       }
+   }
+
+   fn unwrap_result(self) -> Result<(&'a str, O), VerboseError<&'a str>> {
+       match self {
+           Ok(r) => Ok(r),
+           Err(Err::Error(e)) | Err(Err::Failure(e)) => Err(e),
+           Err(Err::Incomplete(_)) => unreachable!(),
+       }
+   }
+}
 
 pub type ParseResult<'a, O> = IResult<&'a str, O, VerboseError<&'a str>>;
 

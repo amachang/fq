@@ -3,6 +3,7 @@ use super::{
         parse_space,
         parse_identifier,
         ParseResult,
+        ParseResultWrapper,
     },
     value::{
         Value,
@@ -59,25 +60,10 @@ use nom::{
     error::{
         ParseError,
         ErrorKind,
-        VerboseError,
     },
 };
 
 use dirs::home_dir;
-
-trait WrapFailure<'a, O> {
-   fn wrap_failure(self) -> Result<Result<(&'a str, O), VerboseError<&'a str>>, nom::Err<VerboseError<&'a str>>>;
-}
-
-impl<'a, O> WrapFailure<'a, O> for ParseResult<'a, O> {
-   fn wrap_failure(self) -> Result<Result<(&'a str, O), VerboseError<&'a str>>, nom::Err<VerboseError<&'a str>>> {
-       match self {
-           Ok(r) => Ok(Ok(r)),
-           Err(Err::Error(err)) => Ok(Err(err)),
-           Err(e) => Err(e),
-       }
-   }
-}
 
 pub struct EvaluationContext <'a> {
     pub parent: Option<Box<&'a EvaluationContext<'a>>>,
