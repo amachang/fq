@@ -44,6 +44,30 @@ impl<'a, O> ParseResultWrapper<'a, O> for ParseResult<'a, O> {
 
 pub type ParseResult<'a, O> = IResult<&'a str, O, VerboseError<&'a str>>;
 
+pub fn parse_list<'a, T, U>(
+    mut parse_separator: impl FnMut(&'a str) -> ParseResult<'a, U>,
+    mut parse_element: impl FnMut(&'a str) -> ParseResult<'a, T>,
+) -> impl FnMut(&'a str) -> ParseResult<'a, Vec<T>> {
+    move |i: &'a str| {
+        let mut elements: Vec<T> = Vec::new();
+        let mut next_i = i;
+        loop {
+            let i = next_i;
+            let Ok((i, element)) = parse_element(i).wrap_failure()? else {
+                break
+            };
+            next_i = i;
+            elements.push(element);
+
+            let Ok((i, _)) = parse_separator(i).wrap_failure()? else {
+                break
+            };
+            next_i = i
+        };
+        Ok((next_i, elements))
+    }
+}
+
 pub fn parse_eof(i: &str) -> ParseResult<&str> {
     preceded(parse_space, eof)(i)
 }

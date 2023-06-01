@@ -20,6 +20,8 @@ fn test_query_general() {
         ("path('') | name()", "set(string(''))"),
         ("foo/bar/baz | dir()", "set(path('foo/bar'))"),
         ("path('') | dir()", "set(path(''))"),
+        ("/", "set(path('/'))"),
+        ("/foo/", "set(path('/foo'))"),
     ];
 
     for (q, expected_q) in &q_map {
@@ -79,5 +81,7 @@ fn just_for_coverage() {
     let rhs1: &dyn Expr = &PathStepExpr { step: PathStep { op: PathStepOperation::Pattern(vec![PathStepPatternComponent::Name("2".to_string())]), predicate_exprs: vec![] } };
     assert!(lhs == rhs0);
     assert!(lhs != rhs1);
+
+
 }
 

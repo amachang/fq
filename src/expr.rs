@@ -2,6 +2,7 @@ use super::{
     parse_util::{
         parse_space,
         parse_identifier,
+        parse_list,
         ParseResult,
         ParseResultWrapper,
     },
@@ -199,26 +200,7 @@ pub fn parse(i: &str) -> ParseResult<Box<dyn Expr>> {
     FilterExpr::parse(i)
 }
 
-pub fn parse_expr_list<'a, T>(delimiter: &'static str, i: &'a str, parse: fn(i: &'a str) -> ParseResult<T>) -> ParseResult<'a, Vec<T>> {
-    let mut exprs: Vec<T> = Vec::new();
-    let mut next_i = i;
-    loop {
-        let i = next_i;
-        let Ok((i, expr)) = parse(i).wrap_failure()? else {
-            break
-        };
-        next_i = i;
-        exprs.push(expr);
-
-        let Ok((i, _)) = preceded(parse_space, tag(delimiter))(i).wrap_failure()? else {
-            break
-        };
-        next_i = i
-    };
-    Ok((next_i, exprs))
-}
-
-pub fn parse_enclosed_expr<T>(open_bracket: char, close_bracket: char, i: &str, parse: fn(i: &str) -> ParseResult<T>) -> ParseResult<T> {
+pub fn parse_enclosed_expr<'a, T>(open_bracket: char, close_bracket: char, i: &'a str, parse: impl FnMut(&'a str) -> ParseResult<T>) -> ParseResult<T> {
     let (i, _) = preceded(parse_space, char(open_bracket))(i)?;
     let (i, expr) = cut(parse)(i)?;
     let (i, _) = cut(preceded(parse_space, char(close_bracket)))(i)?;
@@ -232,7 +214,7 @@ pub struct FilterExpr {
 
 impl FilterExpr {
     pub fn parse(i: &str) -> ParseResult<Box<dyn Expr>> {
-        let (i, exprs) = parse_expr_list("|", i, BinaryExpr::parse)?;
+        let (i, exprs) = parse_list(preceded(parse_space, char('|')), BinaryExpr::parse)(i)?;
 
         if 0 == exprs.len() {
             Err(Err::Error(ParseError::from_error_kind(i, ErrorKind::Tag)))
@@ -282,7 +264,7 @@ impl PathExpr {
                 (i, root_expr)
             },
         };
-        let (i, steps) = parse_expr_list(path::MAIN_SEPARATOR_STR, i, PathStep::parse)?;
+        let (i, steps) = parse_list(preceded(parse_space, tag(path::MAIN_SEPARATOR_STR)), PathStep::parse)(i)?;
         Ok((i, Box::new(PathExpr { root_expr, steps })))
     }
 }
@@ -424,7 +406,7 @@ impl PathStep {
     }
 
     fn parse_exprs_component(i: &str) -> ParseResult<PathStepPatternComponent> {
-        let (i, exprs) = parse_enclosed_expr('{', '}', i, |i| parse_expr_list(",", i, FilterExpr::parse))?;
+        let (i, exprs) = parse_enclosed_expr('{', '}', i, parse_list(preceded(parse_space, char(',')), FilterExpr::parse))?;
         Ok((i, PathStepPatternComponent::Exprs(exprs)))
     }
 
@@ -698,7 +680,7 @@ impl FunctionCall {
             parse_identifier,
         )(i)?;
 
-        let (i, arg_exprs) = parse_enclosed_expr('(', ')', i, |i| parse_expr_list(",", i, FilterExpr::parse))?;
+        let (i, arg_exprs) = parse_enclosed_expr('(', ')', i, parse_list(preceded(parse_space, char(',')), FilterExpr::parse))?;
         let identifier = identifier.to_string();
 
         Ok((i, Box::new(FunctionCall { identifier, arg_exprs })))
