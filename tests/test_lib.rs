@@ -29,6 +29,7 @@ fn test_query_general() {
 
         let r = r.expect(&format!("Should not be error {:?}", q));
         assert_eq!(r, expected_r, "{:?} should equal {:?} in {:?}", r, expected_r, q);
+        assert!(0 < format!("{:?}", r).len());
     }
 }
 
@@ -36,6 +37,7 @@ fn test_query_general() {
 fn test_query_evaluate_error() {
     let q_map = [
         ("fn_not_found()", EvaluateError::FunctionNotFound("fn_not_found".to_string())),
+        ("fn_not_found() | string()", EvaluateError::FunctionNotFound("fn_not_found".to_string())),
     ];
 
     for (q, err) in &q_map {
@@ -70,15 +72,22 @@ fn test_query_parse_error() {
 
 #[test]
 fn just_for_coverage() {
+    let qs = [
+        "foo/bar | name()",
+    ];
+
+    let another_q = "origianl_query/foo/bar";
+
+    for q in &qs {
+        let expr = parse(q).unwrap();
+        assert!(expr == parse(q).unwrap());
+        assert!(expr != parse(another_q).unwrap());
+        assert!(0 < format!("{:?}", expr).len());
+    }
+
     assert_eq!(format!("{:?}", EvaluateError::FunctionNotFound("fn_not_found".to_string())), "FunctionNotFound(\"fn_not_found\")");
     assert_eq!(format!("{:?}", Error::EvaluateError(EvaluateError::FunctionNotFound("fn_not_found".to_string()))), "EvaluateError(FunctionNotFound(\"fn_not_found\"))");
     assert!(Error::EvaluateError(EvaluateError::FunctionNotFound("fn_not_found".to_string())) == Error::EvaluateError(EvaluateError::FunctionNotFound("fn_not_found".to_string())));
     assert!(parse("1").unwrap() == Box::new(PathStepExpr { step: PathStep { op: PathStepOperation::Pattern(vec![PathStepPatternComponent::Name("1".to_string())]), predicate_exprs: vec![] } }));
-
-    let lhs: &dyn Expr = &PathStepExpr { step: PathStep { op: PathStepOperation::Pattern(vec![PathStepPatternComponent::Name("1".to_string())]), predicate_exprs: vec![] } };
-    let rhs0: &dyn Expr = &PathStepExpr { step: PathStep { op: PathStepOperation::Pattern(vec![PathStepPatternComponent::Name("1".to_string())]), predicate_exprs: vec![] } };
-    let rhs1: &dyn Expr = &PathStepExpr { step: PathStep { op: PathStepOperation::Pattern(vec![PathStepPatternComponent::Name("2".to_string())]), predicate_exprs: vec![] } };
-    assert!(lhs == rhs0);
-    assert!(lhs != rhs1);
 }
 
