@@ -42,8 +42,10 @@ impl PartialEq for Value {
             (Number(r), Number(l)) => r == l,
             (Boolean(r), Boolean(l)) => r == l,
             (String(r), String(l)) => r == l,
-            (Path(r), Path(l)) => r == l,
             (Set(r, _), Set(l, _)) => r == l,
+            (Path(r), Path(l)) => r == l,
+            (_, Number(_)) => &self.clone().as_number() == value,
+            (Number(_), _) => self == &value.clone().as_number(),
             _ => false,
         }
     }
@@ -63,13 +65,15 @@ pub enum RealValueError {
 }
 
 impl Value {
+    pub fn empty_set() -> Value {
+        return Value::Set(BTreeSet::new(), PathExistence::NotChecked);
+    }
+
     pub fn is_nan(&self) -> bool {
         let v: Number = self.into();
         v.is_nan()
     }
-}
 
-impl Value {
     pub fn as_string(self) -> Self {
         match self {
             Value::String(_) => self,
@@ -204,6 +208,12 @@ impl From<f64> for Value {
 
 impl From<i64> for Value {
     fn from(v: i64) -> Self {
+        Self::Number(Number::from(v))
+    }
+}
+
+impl From<usize> for Value {
+    fn from(v: usize) -> Self {
         Self::Number(Number::from(v))
     }
 }
@@ -416,6 +426,21 @@ impl<'a> IntoIterator for &'a Value {
         match self {
             Value::Set(set, _) => ValueIterator::SetIterator(set.iter()),
             _ => return ValueIterator::SingleIterator(self, false),
+        }
+    }
+}
+
+impl Into<BTreeSet<RealValue>> for Value {
+    fn into(self) -> BTreeSet<RealValue> {
+        (&self).into()
+    }
+}
+
+impl Into<BTreeSet<RealValue>> for &Value {
+    fn into(self) -> BTreeSet<RealValue> {
+        match self {
+            Value::Set(set, _) => set.clone(),
+            _ => self.clone().as_set().into(),
         }
     }
 }

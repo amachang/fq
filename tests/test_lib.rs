@@ -51,6 +51,7 @@ fn test_query_general() {
         ("foo/bar/baz | dir()", "set(path('foo/bar'))"),
         ("path('') | dir()", "set(path(''))"),
         ("/", "set(path('/'))"),
+        ("number(0) = 0", "true()"),
     ];
 
     for (q, expected_q) in &q_map {

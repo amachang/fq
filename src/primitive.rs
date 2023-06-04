@@ -30,6 +30,18 @@ impl Number {
     }
 }
 
+impl From<usize> for Number {
+    fn from(v: usize) -> Self {
+        Self::Integer(v as i64)
+    }
+}
+
+impl From<i32> for Number {
+    fn from(v: i32) -> Self {
+        Self::Integer(v as i64)
+    }
+}
+
 impl From<i64> for Number {
     fn from(v: i64) -> Self {
         Self::Integer(v)

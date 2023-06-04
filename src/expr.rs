@@ -75,6 +75,7 @@ use dirs::home_dir;
 pub struct EvaluationContext <'a> {
     pub parent: Option<Box<&'a EvaluationContext<'a>>>,
     pub fn_map: HashMap<String, fn(&EvaluationContext, &[Value]) -> Result<Value, EvaluateError>>,
+    pub var_map: HashMap<String, Value>,
     pub context_value: Value,
 }
 
@@ -83,6 +84,7 @@ impl<'a> EvaluationContext <'a> {
         let mut ctx = EvaluationContext {
             parent: None,
             fn_map: HashMap::new(),
+            var_map: HashMap::new(),
             context_value: context_value,
         };
 
@@ -119,6 +121,11 @@ impl<'a> EvaluationContext <'a> {
         ctx.register_function("false", |_, _| {
             Ok(Value::from(false))
         });
+        ctx.register_function("not", |ctx, vs| {
+            let (value, _) = fix_first_arg(ctx, vs, 1);
+            let b: bool = value.into();
+            Ok(Value::from(!b))
+        });
         ctx.register_function("name", |ctx, vs| {
             let (value, _) = fix_first_arg(ctx, vs, 1);
             let path: PathBuf = value.into();
@@ -127,6 +134,22 @@ impl<'a> EvaluationContext <'a> {
                                                                                       // contains OsString
                 None => Value::from(""),
             })
+        });
+        ctx.register_function("len", |ctx, vs| {
+            let (value, _) = fix_first_arg(ctx, vs, 1);
+            let set: BTreeSet<_> = value.into();
+            Ok(Value::from(set.len()))
+        });
+        ctx.register_function("starts_with", |ctx, vs| {
+            let (value, vs) = fix_first_arg(ctx, vs, 2);
+            let prefix = if 0 == vs.len() {
+                "".to_string()
+            } else {
+                vs[0].clone().into()
+            };
+            let target_str: String = value.into();
+            let result: bool = target_str.starts_with(&prefix);
+            Ok(Value::from(result))
         });
         ctx.register_function("dir", |ctx, vs| {
             let (value, _) = fix_first_arg(ctx, vs, 1);
@@ -137,6 +160,19 @@ impl<'a> EvaluationContext <'a> {
                     Value::from(dir)
                 },
                 None => Value::from(PathBuf::from("")),
+            })
+        });
+        ctx.register_function("select", |ctx, vs| {
+            let (value, vs) = fix_first_arg(ctx, vs, 2);
+            Ok(if 0 == vs.len() {
+                value.clone()
+            } else {
+                let result: bool = (&vs[0]).into();
+                if result {
+                    value.clone()
+                } else {
+                    Value::empty_set()
+                }
             })
         });
         ctx.register_function("csv_columns", |ctx, vs| {
@@ -159,7 +195,7 @@ impl<'a> EvaluationContext <'a> {
                     match err.kind() {
                         csv::ErrorKind::Io(io_err) => {
                             if io_err.kind() == io::ErrorKind::NotFound {
-                                return Ok(Value::Set(BTreeSet::new(), PathExistence::NotChecked));
+                                return Ok(Value::empty_set());
                             } else {
                                 return Err(EvaluateError::CsvReadError(err.to_string()));
                             }
@@ -182,7 +218,7 @@ impl<'a> EvaluationContext <'a> {
                     };
                     match first_record.iter().position(|field| field == name) {
                         Some(index) => ColumnSelector::Index(index),
-                        None => return Ok(Value::Set(BTreeSet::new(), PathExistence::NotChecked)),
+                        None => return Ok(Value::empty_set()),
                     }
                 },
             };
@@ -208,6 +244,7 @@ impl<'a> EvaluationContext <'a> {
             }
             return Ok(Value::Set(column_values, PathExistence::NotChecked));
         });
+
         ctx
     }
 
@@ -225,17 +262,37 @@ impl<'a> EvaluationContext <'a> {
         }
     }
 
+    pub fn set_variable(&mut self, key: impl AsRef<str>, value: Value) {
+        self.var_map.insert(key.as_ref().to_string(), value);
+    }
+
+    pub fn get_variable(&self, key: impl AsRef<str>) -> Option<&Value> {
+        match self.var_map.get(key.as_ref()) {
+            Some(variable) => Some(variable),
+            None => match &self.parent {
+                Some(parent) => parent.get_variable(key),
+                None => None,
+            },
+        }
+    }
+
     pub fn get_context_value(&self) -> &Value {
         &self.context_value
     }
 
-    pub fn scope(&'a self, value: Value) -> Self {
+    pub fn scope(&'a self, value: &Value, vars: &[(&str, &Value)]) -> Self {
         let parent_dir: PathBuf = self.context_value.clone().into();
         let context_dir: PathBuf = value.into();
+
+        let mut var_map = HashMap::new();
+        for (name, value) in vars {
+            var_map.insert(name.to_string(), value.clone().clone());
+        }
 
         Self {
             parent: Some(Box::new(self)),
             fn_map: HashMap::new(),
+            var_map: var_map,
             context_value: Value::from(parent_dir.join(context_dir)),
         }
     }
@@ -244,6 +301,7 @@ impl<'a> EvaluationContext <'a> {
 #[derive(Debug, Eq, PartialEq)]
 pub enum EvaluateError {
     FunctionNotFound(String),
+    VariableNotFound(String),
     CouldntReadDir(io::ErrorKind, String),
     CsvReadError(String),
 }
@@ -258,6 +316,9 @@ impl PartialEq for dyn Expr {
     fn eq(&self, rhs: &dyn Expr) -> bool {
         Expr::eq(self, rhs.as_any())
     }
+}
+
+impl Eq for dyn Expr {
 }
 
 macro_rules! expr_eq {
@@ -276,7 +337,7 @@ pub fn parse(i: &str) -> ParseResult<Box<dyn Expr>> {
     FilterExpr::parse(i)
 }
 
-#[derive(Debug, PartialEq)]
+#[derive(Debug, Eq, PartialEq)]
 pub struct FilterExpr {
     pub exprs: Vec<Box<dyn Expr>>,
 }
@@ -300,7 +361,7 @@ impl Expr for FilterExpr {
         for expr in &self.exprs {
             let mut value_vec = Vec::new();
             for value in &values {
-                let ctx = ctx.scope(value);
+                let ctx = ctx.scope(&value, &[("_", &value)]);
                 let value = expr.evaluate(&ctx)?;
                 value_vec.push(value);
             }
@@ -312,7 +373,7 @@ impl Expr for FilterExpr {
     expr_eq!();
 }
 
-#[derive(Debug)]
+#[derive(Debug, Eq)]
 pub struct PathExpr {
     pub root_expr: Box<dyn Expr>,
     pub steps: Vec<PathStep>,
@@ -371,7 +432,7 @@ impl PartialEq for PathExpr {
     }
 }
 
-#[derive(Debug)]
+#[derive(Debug, Eq)]
 pub struct PathRootExpr {
     pub expr: Box<dyn Expr>,
     predicate_exprs: Vec<Box<dyn Expr>>,
@@ -380,13 +441,7 @@ pub struct PathRootExpr {
 impl PathRootExpr {
     pub fn parse(i: &str) -> ParseResult<Box<dyn Expr>> {
         let (i, expr) = alt((
-                delimited(
-                    preceded(parse_space, char('(')),
-                    cut(FilterExpr::parse),
-                    cut(preceded(parse_space, char(')'))),
-                    ),
-                LiteralString::parse,
-                FunctionCall::parse,
+                MemberCallExpr::parse,
                 LiteralRootPath::parse,
                 |i| -> ParseResult<Box<dyn Expr>> {
                     let (i, step) = PathStep::parse(i)?;
@@ -419,7 +474,63 @@ impl PartialEq for PathRootExpr {
     }
 }
 
-#[derive(Debug, PartialEq)]
+#[derive(Debug, Eq)]
+pub struct MemberCallExpr {
+    pub expr: Box<dyn Expr>,
+    pub identifier: String,
+    pub arg_exprs: Vec<Box<dyn Expr>>,
+}
+
+impl MemberCallExpr {
+    pub fn parse(i: &str) -> ParseResult<Box<dyn Expr>> {
+        let (i, expr) = PrimaryExpr::parse(i)?;
+        let mut i = i;
+        let mut expr = expr;
+        loop {
+            i = match preceded(parse_space, char('.'))(i).wrap_failure()? {
+                Err(_) => return Ok((i, expr)),
+                Ok((i, _)) => i,
+            };
+            let (sub_i, FunctionCall { identifier, arg_exprs }) = cut(FunctionCall::parse)(i)?;
+            i = sub_i;
+            expr = Box::new(MemberCallExpr { expr, identifier, arg_exprs });
+        }
+    }
+}
+
+impl Expr for MemberCallExpr {
+    fn evaluate(&self, ctx: &EvaluationContext) -> Result<Value, EvaluateError> {
+        FunctionCallExpr::evaluate_impl(ctx, &self.identifier, Some(&self.expr), &self.arg_exprs)
+    }
+
+    expr_eq!();
+}
+
+impl PartialEq for MemberCallExpr {
+    fn eq(&self, expr: &Self) -> bool {
+        *self.expr == *expr.expr && *self.identifier == *expr.identifier && *self.arg_exprs == *expr.arg_exprs
+    }
+}
+
+pub struct PrimaryExpr {
+}
+
+impl PrimaryExpr {
+    pub fn parse(i: &str) -> ParseResult<Box<dyn Expr>> {
+        alt((
+                delimited(
+                    preceded(parse_space, char('(')),
+                    cut(FilterExpr::parse),
+                    cut(preceded(parse_space, char(')'))),
+                ),
+                LiteralString::parse,
+                VariableReferenceExpr::parse,
+                FunctionCallExpr::parse,
+        ))(i)
+    }
+}
+
+#[derive(Debug, Eq, PartialEq)]
 pub struct PathStepExpr {
     pub step: PathStep,
 }
@@ -432,7 +543,7 @@ impl Expr for PathStepExpr {
     expr_eq!();
 }
 
-#[derive(Debug)]
+#[derive(Debug, Eq)]
 pub struct PathStep {
     pub op: PathStepOperation,
     pub predicate_exprs: Vec<Box<dyn Expr>>,
@@ -526,7 +637,7 @@ impl PathStep {
             let value = next_value;
             let mut values = Vec::new();
             for context_value in &value {
-                let ctx = &ctx.scope(context_value.clone());
+                let ctx = &ctx.scope(&context_value, &[]);
                 let predicate_value = predicate_expr.evaluate(ctx)?;
                 let predicate_value: bool = predicate_value.into();
 
@@ -551,13 +662,13 @@ impl PartialEq for PathStep {
     }
 }
 
-#[derive(Debug, PartialEq)]
+#[derive(Debug, Eq, PartialEq)]
 pub enum PathStepOperation {
     Recursive,
     Pattern(Vec<PathStepPatternComponent>),
 }
 
-#[derive(Debug, PartialEq)]
+#[derive(Debug, Eq, PartialEq)]
 pub enum PathStepPatternComponent {
     Name(String),
     Regex(String),
@@ -620,7 +731,7 @@ impl PathStepOperation {
         let mut result_values = BTreeSet::new();
 
         for context_value in values {
-            let ctx = ctx.scope(context_value.clone());
+            let ctx = ctx.scope(&context_value, &[]);
             let mut evaluated_comps = Vec::new();
             for comp in components {
                 let evaluated_comp = match comp {
@@ -763,14 +874,73 @@ impl Expr for LiteralRootPath {
     expr_eq!();
 }
 
-#[derive(Debug, PartialEq)]
+#[derive(Debug, Eq, PartialEq)]
+pub struct VariableReferenceExpr {
+    pub identifier: String,
+}
+
+impl VariableReferenceExpr {
+    pub fn parse(i: &str) -> ParseResult<Box<dyn Expr>> {
+        let (i, identifier) = preceded(preceded(parse_space, char('$')), cut(parse_identifier))(i)?;
+        let identifier = identifier.to_string();
+        Ok((i, Box::new(VariableReferenceExpr { identifier })))
+    }
+}
+
+impl Expr for VariableReferenceExpr {
+    fn evaluate(&self, ctx: &EvaluationContext) -> Result<Value, EvaluateError> {
+        let Some(value) = ctx.get_variable(&self.identifier) else {
+            return Err(EvaluateError::VariableNotFound(self.identifier.clone()));
+        };
+        Ok(value.clone())
+    }
+
+    expr_eq!();
+}
+
+#[derive(Debug, Eq, PartialEq)]
+pub struct FunctionCallExpr {
+    pub identifier: String,
+    pub arg_exprs: Vec<Box<dyn Expr>>,
+}
+
+impl FunctionCallExpr {
+    pub fn parse(i: &str) -> ParseResult<Box<dyn Expr>> {
+        let (i, FunctionCall { identifier, arg_exprs }) = FunctionCall::parse(i)?;
+        Ok((i, Box::new(FunctionCallExpr { identifier, arg_exprs })))
+    }
+
+    pub fn evaluate_impl(ctx: &EvaluationContext, identifier: &String, self_expr: Option<&Box<dyn Expr>>, arg_exprs: &Vec<Box<dyn Expr>>) -> Result<Value, EvaluateError> {
+        let Some(function) = ctx.get_function(identifier) else {
+            return Err(EvaluateError::FunctionNotFound(identifier.clone()));
+        };
+        let mut arg_values: Vec<Value> = Vec::new();
+        if let Some(self_expr) = self_expr {
+            arg_values.push(self_expr.evaluate(ctx)?);
+        };
+        for expr in arg_exprs {
+            let value = expr.evaluate(ctx)?;
+            arg_values.push(value);
+        }
+        function(ctx, &arg_values)
+    }
+}
+
+impl Expr for FunctionCallExpr {
+    fn evaluate(&self, ctx: &EvaluationContext) -> Result<Value, EvaluateError> {
+        FunctionCallExpr::evaluate_impl(ctx, &self.identifier, None, &self.arg_exprs)
+    }
+
+    expr_eq!();
+}
+
 pub struct FunctionCall {
     pub identifier: String,
     arg_exprs: Vec<Box<dyn Expr>>,
 }
 
 impl FunctionCall {
-    pub fn parse(i: &str) -> ParseResult<Box<dyn Expr>> {
+    pub fn parse(i: &str) -> ParseResult<FunctionCall> {
         let (i, identifier) = preceded(
             parse_space,
             parse_identifier,
@@ -783,24 +953,8 @@ impl FunctionCall {
         )(i)?;
         let identifier = identifier.to_string();
 
-        Ok((i, Box::new(FunctionCall { identifier, arg_exprs })))
+        Ok((i, FunctionCall { identifier, arg_exprs }))
     }
-}
-
-impl Expr for FunctionCall {
-    fn evaluate(&self, ctx: &EvaluationContext) -> Result<Value, EvaluateError> {
-        let Some(function) = ctx.get_function(&self.identifier) else {
-            return Err(EvaluateError::FunctionNotFound(self.identifier.clone()));
-        };
-        let mut arg_values: Vec<Value> = Vec::new();
-        for expr in &self.arg_exprs {
-            let value = expr.evaluate(ctx)?;
-            arg_values.push(value);
-        }
-        function(ctx, &arg_values)
-    }
-
-    expr_eq!();
 }
 
 #[derive(Debug, Eq, PartialEq)]
@@ -827,7 +981,7 @@ impl Expr for LiteralString {
     expr_eq!();
 }
 
-#[derive(Debug)]
+#[derive(Debug, Eq)]
 pub struct BinaryExpr {
     pub op: BinaryOperator,
     pub left_expr: Box<dyn Expr>,
