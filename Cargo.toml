@@ -13,6 +13,7 @@ name = "fq"
 
 [dependencies]
 clap = { version = "4.3.0", features = ["derive"] }
+csv = "1.2.2"
 dirs = "5.0.1"
 nom = "7"
 regex = "1.8"

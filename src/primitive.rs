@@ -72,6 +72,16 @@ impl ToString for Number {
     }
 }
 
+impl Into<usize> for Number {
+    fn into(self) -> usize {
+        let i = match self {
+            Self::Integer(i) => i,
+            Self::Float(f) => f.round() as i64,
+        };
+        i as usize
+    }
+}
+
 impl Neg for Number {
     type Output = Number;
     fn neg(self) -> Self::Output {

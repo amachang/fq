@@ -35,6 +35,8 @@ use std::{
 use regex;
 use regex::Regex;
 
+use csv;
+
 use nom::{
     bytes::complete::{
         tag,
@@ -72,7 +74,7 @@ use dirs::home_dir;
 
 pub struct EvaluationContext <'a> {
     pub parent: Option<Box<&'a EvaluationContext<'a>>>,
-    pub fn_map: HashMap<String, fn(&EvaluationContext, &[Value]) -> Value>,
+    pub fn_map: HashMap<String, fn(&EvaluationContext, &[Value]) -> Result<Value, EvaluateError>>,
     pub context_value: Value,
 }
 
@@ -84,8 +86,8 @@ impl<'a> EvaluationContext <'a> {
             context_value: context_value,
         };
 
-        fn fix_first_arg<'a>(ctx: &'a EvaluationContext, vs: &'a [Value]) -> (&'a Value, &'a [Value]) {
-            if vs.len() < 1 {
+        fn fix_first_arg<'a>(ctx: &'a EvaluationContext, vs: &'a [Value], expected_len: usize) -> (&'a Value, &'a [Value]) {
+            if vs.len() < expected_len {
                 (ctx.get_context_value(), vs)
             } else {
                 (&vs[0], &vs[1..])
@@ -93,58 +95,127 @@ impl<'a> EvaluationContext <'a> {
         }
 
         ctx.register_function("string", |ctx, vs| {
-            let (value, _) = fix_first_arg(ctx, vs);
-            value.clone().as_string()
+            let (value, _) = fix_first_arg(ctx, vs, 1);
+            Ok(value.clone().as_string())
         });
         ctx.register_function("number", |ctx, vs| {
-            let (value, _) = fix_first_arg(ctx, vs);
-            value.clone().as_number()
+            let (value, _) = fix_first_arg(ctx, vs, 1);
+            Ok(value.clone().as_number())
         });
         ctx.register_function("boolean", |ctx, vs| {
-            let (value, _) = fix_first_arg(ctx, vs);
-            value.clone().as_boolean()
+            let (value, _) = fix_first_arg(ctx, vs, 1);
+            Ok(value.clone().as_boolean())
         });
         ctx.register_function("path", |ctx, vs| {
-            let (value, _) = fix_first_arg(ctx, vs);
-            value.clone().as_path()
+            let (value, _) = fix_first_arg(ctx, vs, 1);
+            Ok(value.clone().as_path())
         });
         ctx.register_function("set", |_, vs| {
-            Value::from(vs)
+            Ok(Value::from(vs))
         });
         ctx.register_function("true", |_, _| {
-            Value::from(true)
+            Ok(Value::from(true))
         });
         ctx.register_function("false", |_, _| {
-            Value::from(false)
+            Ok(Value::from(false))
         });
         ctx.register_function("name", |ctx, vs| {
-            let (value, _) = fix_first_arg(ctx, vs);
+            let (value, _) = fix_first_arg(ctx, vs, 1);
             let path: PathBuf = value.into();
-            match path.file_name() {
+            Ok(match path.file_name() {
                 Some(os_name) => Value::from(os_name.to_string_lossy().into_owned()), // TODO String should be
                                                                                       // contains OsString
                 None => Value::from(""),
-            }
+            })
         });
         ctx.register_function("dir", |ctx, vs| {
-            let (value, _) = fix_first_arg(ctx, vs);
+            let (value, _) = fix_first_arg(ctx, vs, 1);
             let path: PathBuf = value.into();
-            match path.parent() {
+            Ok(match path.parent() {
                 Some(dir) => {
                     let dir: PathBuf = dir.into();
                     Value::from(dir)
                 },
                 None => Value::from(PathBuf::from("")),
+            })
+        });
+        ctx.register_function("csv_columns", |ctx, vs| {
+            let (value, vs) = fix_first_arg(ctx, vs, 2);
+            enum ColumnSelector { All, Index(usize) }
+            enum ColumnSelectorOrHeaderName { ColumnSelector(ColumnSelector), HeaderName(String) }
+            let column_selector = if 0 == vs.len() {
+                ColumnSelectorOrHeaderName::ColumnSelector(ColumnSelector::All)
+            } else {
+                let selector_value = &vs[0];
+                if selector_value.likes_number() {
+                    ColumnSelectorOrHeaderName::ColumnSelector(ColumnSelector::Index(selector_value.into()))
+                } else {
+                    ColumnSelectorOrHeaderName::HeaderName(selector_value.into())
+                }
+            };
+            let path: PathBuf = value.into();
+            let mut reader = match csv::ReaderBuilder::new().delimiter(b',').has_headers(false).from_path(&path) {
+                Err(err) => {
+                    match err.kind() {
+                        csv::ErrorKind::Io(io_err) => {
+                            if io_err.kind() == io::ErrorKind::NotFound {
+                                return Ok(Value::Set(BTreeSet::new(), PathExistence::NotChecked));
+                            } else {
+                                return Err(EvaluateError::CsvReadError(err.to_string()));
+                            }
+                        },
+                        _ => return Err(EvaluateError::CsvReadError(err.to_string())),
+                    }
+                },
+                Ok(reader) => reader,
+            };
+            let mut column_values: BTreeSet<RealValue> = BTreeSet::new();
+            let mut record_iter = reader.records();
+            let column_selector = match column_selector {
+                ColumnSelectorOrHeaderName::ColumnSelector(r) => r,
+                ColumnSelectorOrHeaderName::HeaderName(name) => {
+                    let first_record = record_iter.next();
+                    let first_record = match first_record {
+                        Some(Err(err)) => return Err(EvaluateError::CsvReadError(err.to_string())),
+                        Some(Ok(record)) => record,
+                        None => return Ok(Value::Set(BTreeSet::new(), PathExistence::NotChecked)),
+                    };
+                    match first_record.iter().position(|field| field == name) {
+                        Some(index) => ColumnSelector::Index(index),
+                        None => return Ok(Value::Set(BTreeSet::new(), PathExistence::NotChecked)),
+                    }
+                },
+            };
+
+            for record in record_iter {
+                let record = match record {
+                    Err(err) => return Err(EvaluateError::CsvReadError(err.to_string())),
+                    Ok(record) => record,
+                };
+                match &column_selector {
+                    ColumnSelector::All => {
+                        column_values.insert(RealValue::String(record.as_slice().to_string()));
+                    },
+                    ColumnSelector::Index(index) => {
+                        match record.get(*index) {
+                            Some(field) => {
+                                column_values.insert(RealValue::String(field.to_string()));
+                            }
+                            None => (),
+                        }
+                    },
+                }
             }
+            return Ok(Value::Set(column_values, PathExistence::NotChecked));
         });
         ctx
     }
 
-    pub fn register_function(&mut self, key: impl AsRef<str>, function: fn(&EvaluationContext, &[Value]) -> Value) {
+    pub fn register_function(&mut self, key: impl AsRef<str>, function: fn(&EvaluationContext, &[Value]) -> Result<Value, EvaluateError>) {
         self.fn_map.insert(key.as_ref().to_string(), function);
     }
 
-    pub fn get_function(&self, key: impl AsRef<str>) -> Option<&fn(&EvaluationContext, &[Value]) -> Value> {
+    pub fn get_function(&self, key: impl AsRef<str>) -> Option<&fn(&EvaluationContext, &[Value]) -> Result<Value, EvaluateError>> {
         match self.fn_map.get(key.as_ref()) {
             Some(function) => Some(function),
             None => match &self.parent {
@@ -174,6 +245,7 @@ impl<'a> EvaluationContext <'a> {
 pub enum EvaluateError {
     FunctionNotFound(String),
     CouldntReadDir(io::ErrorKind, String),
+    CsvReadError(String),
 }
 
 pub trait Expr: Debug + Any {
@@ -725,8 +797,7 @@ impl Expr for FunctionCall {
             let value = expr.evaluate(ctx)?;
             arg_values.push(value);
         }
-        let return_value = function(ctx, &arg_values);
-        Ok(return_value)
+        function(ctx, &arg_values)
     }
 
     expr_eq!();

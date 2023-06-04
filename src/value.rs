@@ -123,6 +123,22 @@ impl Value {
             _ => PathExistence::NotChecked,
         }
     }
+
+    pub fn likes_number(&self) -> bool {
+        match self {
+            Value::Number(_) => true,
+            Value::Boolean(_) => true,
+            Value::String(_) => false,
+            Value::Path(path) => {
+                let string = convert_path_to_string(path);
+                match string.parse::<f64>() {
+                    Ok(_) => true,
+                    Err(_) => false,
+                }
+            },
+            Value::Set(set, _) => convert_set_to_single_value(set).map_or(false, |v| v.likes_number()),
+        }
+    }
 }
 
 impl From<bool> for Value {
@@ -189,6 +205,20 @@ impl From<f64> for Value {
 impl From<i64> for Value {
     fn from(v: i64) -> Self {
         Self::Number(Number::from(v))
+    }
+}
+
+impl Into<usize> for &Value {
+    fn into(self) -> usize {
+        let number: Number = self.into();
+        let i: usize = number.into();
+        i
+    }
+}
+
+impl Into<usize> for Value {
+    fn into(self) -> usize {
+        (&self).into()
     }
 }
 
