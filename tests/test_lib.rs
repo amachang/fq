@@ -102,12 +102,12 @@ fn test_query_parse_error() {
 
 #[test]
 fn just_for_coverage() {
+
+    // Debug and PartialEq traits for errors
     let qs = [
         "foo/bar | name()",
     ];
-
     let another_q = "origianl_query/foo/bar";
-
     for q in &qs {
         let expr = parse(q).unwrap();
         assert!(expr == parse(q).unwrap());
@@ -115,6 +115,7 @@ fn just_for_coverage() {
         assert!(0 < format!("{:?}", expr).len());
     }
 
+    // PathExpr parser failures
     let result = PathExpr::parse_core(
         "foo<separator!>bar",
         preceded(char('<'), cut(terminated(tag("separator"), char('>')))),
@@ -137,8 +138,11 @@ fn just_for_coverage() {
     );
     assert_eq!(result, Err(Err::Failure(VerboseError { errors: vec![("!>foo", VerboseErrorKind::Char('>'))] })));
 
+    // Debug traits for errors
     assert_eq!(format!("{:?}", EvaluateError::FunctionNotFound("fn_not_found".to_string())), "FunctionNotFound(\"fn_not_found\")");
     assert_eq!(format!("{:?}", Error::EvaluateError(EvaluateError::FunctionNotFound("fn_not_found".to_string()))), "EvaluateError(FunctionNotFound(\"fn_not_found\"))");
+
+    // PartialEq traits for errors
     assert!(Error::EvaluateError(EvaluateError::FunctionNotFound("fn_not_found".to_string())) == Error::EvaluateError(EvaluateError::FunctionNotFound("fn_not_found".to_string())));
     assert!(parse("1").unwrap() == Box::new(PathStepExpr { step: PathStep { op: PathStepOperation::Pattern(vec![PathStepPatternComponent::Name("1".to_string())]), predicate_exprs: vec![] } }));
 }
