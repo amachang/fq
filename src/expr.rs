@@ -248,18 +248,35 @@ pub struct PathExpr {
 
 impl PathExpr {
     pub fn parse(i: &str) -> ParseResult<Box<dyn Expr>> {
-        let (i, root_expr) = match LiteralRootPath::parse_separator_like_root_path(i).wrap_failure()? {
+        Self::parse_core(
+            i,
+            preceded(parse_space, tag(path::MAIN_SEPARATOR_STR)),
+            LiteralRootPath::parse_separator_like_root_path,
+            PathRootExpr::parse,
+            PathStep::parse,
+        )
+    }
+
+    // remove parser dependencies for test
+    pub fn parse_core<'a, T>(
+        i: &'a str,
+        mut parse_separator: impl FnMut(&'a str) -> ParseResult<'a, T>,
+        mut parse_separator_like_root_path: impl FnMut(&'a str) -> ParseResult<'a, Box<dyn Expr>>,
+        mut parse_path_root_expr: impl FnMut(&'a str) -> ParseResult<'a, Box<dyn Expr>>,
+        parse_path_step: impl FnMut(&'a str) -> ParseResult<'a, PathStep>,
+    ) -> ParseResult<Box<dyn Expr>> {
+        let (i, root_expr) = match parse_separator_like_root_path(i).wrap_failure()? {
             Ok(r) => r,
             Err(_) => {
-                let (i, root_expr) = PathRootExpr::parse(i)?;
-                let i = match preceded(parse_space, tag(path::MAIN_SEPARATOR_STR))(i).wrap_failure()? {
+                let (i, root_expr) = parse_path_root_expr(i)?;
+                let i = match parse_separator(i).wrap_failure()? {
                     Ok((i, _)) => i,
                     Err(_) => return Ok((i, root_expr)),
                 };
                 (i, root_expr)
             },
         };
-        let (i, steps) = separated_list0(preceded(parse_space, tag(path::MAIN_SEPARATOR_STR)), PathStep::parse)(i)?;
+        let (i, steps) = separated_list0(parse_separator, parse_path_step)(i)?;
         Ok((i, Box::new(PathExpr { root_expr, steps })))
     }
 }

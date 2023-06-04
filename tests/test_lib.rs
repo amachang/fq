@@ -1,7 +1,37 @@
 use fq::*;
+
+use std::{
+    path,
+    path::PathBuf,
+};
+
 use nom::error::{
     VerboseErrorKind,
     ErrorKind,
+};
+
+use nom::{
+    Err,
+    error::{
+        VerboseError,
+    },
+    sequence::{
+        preceded,
+        terminated,
+    },
+    character::{
+        complete::{
+            char,
+        },
+    },
+    bytes::{
+        complete::{
+            tag,
+        },
+    },
+    combinator::{
+        cut,
+    },
 };
 
 #[test]
@@ -84,6 +114,28 @@ fn just_for_coverage() {
         assert!(expr != parse(another_q).unwrap());
         assert!(0 < format!("{:?}", expr).len());
     }
+
+    let result = PathExpr::parse_core(
+        "foo<separator!>bar",
+        preceded(char('<'), cut(terminated(tag("separator"), char('>')))),
+        LiteralRootPath::parse_separator_like_root_path,
+        PathRootExpr::parse,
+        PathStep::parse,
+    );
+    assert_eq!(result, Err(Err::Failure(VerboseError { errors: vec![("!>bar", VerboseErrorKind::Char('>'))] })));
+
+    let result = PathExpr::parse_core(
+        "<root!>foo",
+        preceded(parse_space, tag(path::MAIN_SEPARATOR_STR)),
+        |i| {
+            let (i, path) = preceded(char('<'), cut(terminated(tag("root"), char('>'))))(i)?;
+            let expr = Box::new(LiteralRootPath { path: PathBuf::from(path) });
+            Ok((i, expr))
+        },
+        PathRootExpr::parse,
+        PathStep::parse,
+    );
+    assert_eq!(result, Err(Err::Failure(VerboseError { errors: vec![("!>foo", VerboseErrorKind::Char('>'))] })));
 
     assert_eq!(format!("{:?}", EvaluateError::FunctionNotFound("fn_not_found".to_string())), "FunctionNotFound(\"fn_not_found\")");
     assert_eq!(format!("{:?}", Error::EvaluateError(EvaluateError::FunctionNotFound("fn_not_found".to_string()))), "EvaluateError(FunctionNotFound(\"fn_not_found\"))");
