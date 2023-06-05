@@ -143,6 +143,16 @@ impl Value {
             Value::Set(set, _) => convert_set_to_single_value(set).map_or(false, |v| v.likes_number()),
         }
     }
+
+    pub fn is_set(&self) -> bool {
+        match self {
+            Value::Number(_) => false,
+            Value::Boolean(_) => false,
+            Value::String(_) => false,
+            Value::Path(_) => false,
+            Value::Set(_, _) => true,
+        }
+    }
 }
 
 impl From<bool> for Value {

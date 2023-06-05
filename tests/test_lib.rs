@@ -120,8 +120,8 @@ fn just_for_coverage() {
     let result = PathExpr::parse_core(
         "foo<separator!>bar",
         preceded(char('<'), cut(terminated(tag("separator"), char('>')))),
-        LiteralRootPath::parse_separator_like_root_path,
-        PathRootExpr::parse,
+        PathRootStepExpr::parse_separator_like_expr,
+        PathRootStepExpr::parse,
         PathStep::parse,
     );
     assert_eq!(result, Err(Err::Failure(VerboseError { errors: vec![("!>bar", VerboseErrorKind::Char('>'))] })));
@@ -131,10 +131,12 @@ fn just_for_coverage() {
         preceded(parse_space, tag(path::MAIN_SEPARATOR_STR)),
         |i| {
             let (i, path) = preceded(char('<'), cut(terminated(tag("root"), char('>'))))(i)?;
-            let expr = Box::new(LiteralRootPath { path: PathBuf::from(path) });
+            let expr = LiteralPathRootExpr { path: PathBuf::from(path) };
+            let expr = PathRootExpr::LiteralPathRootExpr(expr);
+            let expr = PathRootStepExpr { expr, predicate_exprs: vec![] };
             Ok((i, expr))
         },
-        PathRootExpr::parse,
+        PathRootStepExpr::parse,
         PathStep::parse,
     );
     assert_eq!(result, Err(Err::Failure(VerboseError { errors: vec![("!>foo", VerboseErrorKind::Char('>'))] })));
@@ -145,6 +147,5 @@ fn just_for_coverage() {
 
     // PartialEq traits for errors
     assert!(Error::EvaluateError(EvaluateError::FunctionNotFound("fn_not_found".to_string())) == Error::EvaluateError(EvaluateError::FunctionNotFound("fn_not_found".to_string())));
-    assert!(parse("1").unwrap() == Box::new(PathStepExpr { step: PathStep { op: PathStepOperation::Pattern(vec![PathStepPatternComponent::Name("1".to_string())]), predicate_exprs: vec![] } }));
 }
 

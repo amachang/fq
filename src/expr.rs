@@ -25,7 +25,6 @@ use std::{
     io,
     fs,
     path,
-    any::Any,
     path::{
         Path,
         PathBuf,
@@ -306,86 +305,61 @@ pub enum EvaluateError {
     CsvReadError(String),
 }
 
-pub trait Expr: Debug + Any {
+pub trait Expr: Debug {
     fn evaluate(&self, ctx: &EvaluationContext) -> Result<Value, EvaluateError>;
-    fn as_any(&self) -> &dyn Any;
-    fn eq(&self, rhs: &dyn Any) -> bool;
 }
 
-impl PartialEq for dyn Expr {
-    fn eq(&self, rhs: &dyn Expr) -> bool {
-        Expr::eq(self, rhs.as_any())
-    }
-}
-
-impl Eq for dyn Expr {
-}
-
-macro_rules! expr_eq {
-    () => (
-        fn as_any(&self) -> &dyn Any {
-            self
-        }
-
-        fn eq(&self, rhs: &dyn Any) -> bool {
-            rhs.downcast_ref::<Self>().map_or(false, |rhs| self == rhs)
-        }
-    );
-}
-
-pub fn parse(i: &str) -> ParseResult<Box<dyn Expr>> {
+pub fn parse(i: &str) -> ParseResult<FilterExpr> {
     FilterExpr::parse(i)
 }
 
 #[derive(Debug, Eq, PartialEq)]
 pub struct FilterExpr {
-    pub exprs: Vec<Box<dyn Expr>>,
+    pub exprs: Vec<BinaryOperandExpr>,
 }
 
 impl FilterExpr {
-    pub fn parse(i: &str) -> ParseResult<Box<dyn Expr>> {
-        let (i, exprs) = separated_list1(preceded(parse_space, char('|')), BinaryExpr::parse)(i)?;
-
-        if 1 == exprs.len() {
-            let expr = exprs.into_iter().next().unwrap();
-            Ok((i, expr))
-        } else {
-            Ok((i, Box::new(FilterExpr { exprs })))
-        }
+    pub fn parse(i: &str) -> ParseResult<Self> {
+        let (i, exprs) = separated_list1(preceded(parse_space, char('|')), BinaryOperandExpr::parse)(i)?;
+        Ok((i, Self { exprs }))
     }
 }
 
 impl Expr for FilterExpr {
     fn evaluate(&self, ctx: &EvaluationContext) -> Result<Value, EvaluateError> {
-        let mut values = ctx.get_context_value().clone();
-        for expr in &self.exprs {
-            let mut value_vec = Vec::new();
-            for value in &values {
+        let mut expr_iter = self.exprs.iter();
+        let mut value = expr_iter.next().expect("more than one exprs").evaluate(ctx)?;
+        for expr in expr_iter {
+            if value.is_set() {
+                let mut value_vec = Vec::new();
+                for v in &value {
+                    let ctx = ctx.scope(&v, &[("_", &v)]);
+                    let result_value = expr.evaluate(&ctx)?;
+                    value_vec.push(result_value);
+                }
+                value = Value::from(value_vec);
+            } else {
                 let ctx = ctx.scope(&value, &[("_", &value)]);
-                let value = expr.evaluate(&ctx)?;
-                value_vec.push(value);
+                value = expr.evaluate(&ctx)?;
             }
-            values = Value::from(value_vec);
         }
-        Ok(Value::from(values))
+        Ok(value)
     }
-
-    expr_eq!();
 }
 
-#[derive(Debug, Eq)]
+#[derive(Debug, Eq, PartialEq)]
 pub struct PathExpr {
-    pub root_expr: Box<dyn Expr>,
+    pub root_expr: PathRootStepExpr,
     pub steps: Vec<PathStep>,
 }
 
 impl PathExpr {
-    pub fn parse(i: &str) -> ParseResult<Box<dyn Expr>> {
+    pub fn parse(i: &str) -> ParseResult<PathExpr> {
         Self::parse_core(
             i,
             preceded(parse_space, tag(path::MAIN_SEPARATOR_STR)),
-            LiteralRootPath::parse_separator_like_root_path,
-            PathRootExpr::parse,
+            PathRootStepExpr::parse_separator_like_expr,
+            PathRootStepExpr::parse,
             PathStep::parse,
         )
     }
@@ -394,23 +368,23 @@ impl PathExpr {
     pub fn parse_core<'a, T>(
         i: &'a str,
         mut parse_separator: impl FnMut(&'a str) -> ParseResult<'a, T>,
-        mut parse_separator_like_root_path: impl FnMut(&'a str) -> ParseResult<'a, Box<dyn Expr>>,
-        mut parse_path_root_expr: impl FnMut(&'a str) -> ParseResult<'a, Box<dyn Expr>>,
+        mut parse_separator_like_expr: impl FnMut(&'a str) -> ParseResult<'a, PathRootStepExpr>,
+        mut parse_path_root_expr: impl FnMut(&'a str) -> ParseResult<'a, PathRootStepExpr>,
         parse_path_step: impl FnMut(&'a str) -> ParseResult<'a, PathStep>,
-    ) -> ParseResult<Box<dyn Expr>> {
-        let (i, root_expr) = match parse_separator_like_root_path(i).wrap_failure()? {
+    ) -> ParseResult<PathExpr> {
+        let (i, root_expr) = match parse_separator_like_expr(i).wrap_failure()? {
             Ok(r) => r,
             Err(_) => {
                 let (i, root_expr) = parse_path_root_expr(i)?;
                 let i = match parse_separator(i).wrap_failure()? {
                     Ok((i, _)) => i,
-                    Err(_) => return Ok((i, root_expr)),
+                    Err(_) => return Ok((i, PathExpr { root_expr, steps: vec![] })),
                 };
                 (i, root_expr)
             },
         };
         let (i, steps) = separated_list0(parse_separator, parse_path_step)(i)?;
-        Ok((i, Box::new(PathExpr { root_expr, steps })))
+        Ok((i, PathExpr { root_expr, steps }))
     }
 }
 
@@ -422,111 +396,176 @@ impl Expr for PathExpr {
         };
         return Ok(value)
     }
-
-    expr_eq!();
 }
 
-impl PartialEq for PathExpr {
-    fn eq(&self, expr: &Self) -> bool {
-        *self.root_expr == *expr.root_expr && self.steps == expr.steps
-    }
+#[derive(Debug, Eq, PartialEq)]
+pub struct PathRootStepExpr {
+    pub expr: PathRootExpr,
+    pub predicate_exprs: Vec<FilterExpr>,
 }
 
-#[derive(Debug, Eq)]
-pub struct PathRootExpr {
-    pub expr: Box<dyn Expr>,
-    predicate_exprs: Vec<Box<dyn Expr>>,
-}
-
-impl PathRootExpr {
-    pub fn parse(i: &str) -> ParseResult<Box<dyn Expr>> {
+impl PathRootStepExpr {
+    pub fn parse(i: &str) -> ParseResult<Self> {
         let (i, expr) = alt((
-                MemberCallExpr::parse,
-                LiteralRootPath::parse,
-                |i| -> ParseResult<Box<dyn Expr>> {
-                    let (i, step) = PathStep::parse(i)?;
-                    Ok((i, Box::new(PathStepExpr { step })))
-                },
+                |i| MemberCallExpr::parse(i).map(|(i, expr)| (i, PathRootExpr::MemberCallExpr(expr))),
+                |i| LiteralPathRootExpr::parse(i).map(|(i, expr)| (i, PathRootExpr::LiteralPathRootExpr(expr))),
+                |i| PathStep::parse(i).map(|(i, step)| (i, PathRootExpr::PathStep(step))),
         ))(i)?;
 
         let (i, predicate_exprs) = PathStep::parse_predicates(i)?;
-
-        if 0 == predicate_exprs.len() {
-            Ok((i, expr))
-        } else {
-            Ok((i, Box::new(PathRootExpr { expr, predicate_exprs })))
-        }
+        Ok((i, Self { expr, predicate_exprs }))
     }
+
+    pub fn parse_separator_like_expr(i: &str) -> ParseResult<Self> {
+        let (i, expr) = LiteralPathRootExpr::parse_separator_like_expr(i)?;
+        let expr = PathRootExpr::LiteralPathRootExpr(expr);
+        Ok((i, Self { expr, predicate_exprs: vec![] }))
+    }
+}
+
+impl Expr for PathRootStepExpr {
+    fn evaluate(&self, ctx: &EvaluationContext) -> Result<Value, EvaluateError> {
+        let value = self.expr.evaluate(ctx)?;
+        let value = PathStep::evaluate_predicates(ctx, &self.predicate_exprs, value)?;
+        Ok(value)
+    }
+}
+
+#[derive(Debug, Eq, PartialEq)]
+pub enum PathRootExpr {
+    MemberCallExpr(MemberCallExpr),
+    LiteralPathRootExpr(LiteralPathRootExpr),
+    PathStep(PathStep),
 }
 
 impl Expr for PathRootExpr {
     fn evaluate(&self, ctx: &EvaluationContext) -> Result<Value, EvaluateError> {
-        let value = self.expr.evaluate(ctx)?;
-        PathStep::evaluate_predicates(ctx, &self.predicate_exprs, value)
-    }
-
-    expr_eq!();
-}
-
-impl PartialEq for PathRootExpr {
-    fn eq(&self, expr: &Self) -> bool {
-        *self.expr == *expr.expr && self.predicate_exprs == expr.predicate_exprs
+        use PathRootExpr::*;
+        match self {
+            MemberCallExpr(expr) => expr.evaluate(ctx),
+            LiteralPathRootExpr(expr) => expr.evaluate(ctx),
+            PathStep(step) => step.evaluate(ctx, &Value::from("")),
+        }
     }
 }
 
-#[derive(Debug, Eq)]
+#[derive(Debug, Eq, PartialEq)]
+pub struct LiteralPathRootExpr {
+    pub path: PathBuf
+}
+
+impl LiteralPathRootExpr {
+    #[cfg(not(windows))]
+    pub fn parse_separator_like_expr(i: &str) -> ParseResult<Self> {
+        Self::parse_for_unix(i)
+    }
+
+    #[cfg(windows)]
+    pub fn parse_separator_like_expr(i: &str) -> ParseResult<Self> {
+        Self::parse_for_windows(i)
+    }
+
+    pub fn parse(i: &str) -> ParseResult<Self> {
+        let (i, _) = preceded(parse_space, tag("~"))(i)?;
+        Ok((i, LiteralPathRootExpr { path: home_dir().unwrap_or(PathBuf::from("/")) }))
+    }
+
+    pub fn parse_for_unix(i: &str) -> ParseResult<Self> {
+        let (i, path) = preceded(parse_space, tag("/"))(i)?;
+        Ok((i, LiteralPathRootExpr { path: PathBuf::from(path) }))
+    }
+
+    pub fn parse_for_windows(i: &str) -> ParseResult<Self> {
+        let (i, path) = preceded(
+            parse_space,
+            recognize(
+                alt((
+                        tag(r"\"),
+                        Self::parse_windows_drive_root,
+                        recognize(pair(alt((tag(r"\\?\"), tag(r"\\.\"))), Self::parse_windows_drive_root)),
+                ))
+            )
+        )(i)?;
+        Ok((i, LiteralPathRootExpr { path: PathBuf::from(path) }))
+    }
+
+    fn parse_windows_drive_root(i: &str) -> ParseResult<&str> {
+        recognize(pair(satisfy(|c| 'A' <= c && c <= 'Z'), tag(r":\")))(i)
+    }
+}
+
+impl Expr for LiteralPathRootExpr {
+    fn evaluate(&self, _: &EvaluationContext) -> Result<Value, EvaluateError> {
+        Ok(Value::from(self.path.clone()))
+    }
+}
+
+#[derive(Debug, Eq, PartialEq)]
 pub struct MemberCallExpr {
-    pub expr: Box<dyn Expr>,
-    pub identifier: String,
-    pub arg_exprs: Vec<Box<dyn Expr>>,
+    pub expr: PrimaryExpr,
+    pub function_calls: Vec<FunctionCall>,
 }
 
 impl MemberCallExpr {
-    pub fn parse(i: &str) -> ParseResult<Box<dyn Expr>> {
+    pub fn parse(i: &str) -> ParseResult<Self> {
         let (i, expr) = PrimaryExpr::parse(i)?;
         let mut i = i;
-        let mut expr = expr;
+        let mut function_calls = Vec::new();
         loop {
             i = match preceded(parse_space, char('.'))(i).wrap_failure()? {
-                Err(_) => return Ok((i, expr)),
+                Err(_) => break,
                 Ok((i, _)) => i,
             };
-            let (sub_i, FunctionCall { identifier, arg_exprs }) = cut(FunctionCall::parse)(i)?;
+            let (sub_i, function_call) = cut(FunctionCall::parse)(i)?;
             i = sub_i;
-            expr = Box::new(MemberCallExpr { expr, identifier, arg_exprs });
+            function_calls.push(function_call);
         }
+        Ok((i, MemberCallExpr { expr, function_calls }))
     }
 }
 
 impl Expr for MemberCallExpr {
     fn evaluate(&self, ctx: &EvaluationContext) -> Result<Value, EvaluateError> {
-        FunctionCallExpr::evaluate_impl(ctx, &self.identifier, Some(&self.expr), &self.arg_exprs)
-    }
-
-    expr_eq!();
-}
-
-impl PartialEq for MemberCallExpr {
-    fn eq(&self, expr: &Self) -> bool {
-        *self.expr == *expr.expr && *self.identifier == *expr.identifier && *self.arg_exprs == *expr.arg_exprs
+        let mut value = self.expr.evaluate(ctx)?;
+        for function_call in &self.function_calls {
+            value = function_call.evaluate(ctx, Some(value))?;
+        };
+        Ok(value)
     }
 }
 
-pub struct PrimaryExpr {
+#[derive(Debug, Eq, PartialEq)]
+pub enum PrimaryExpr {
+    FilterExpr(FilterExpr),
+    LiteralStringExpr(LiteralStringExpr),
+    VariableReferenceExpr(VariableReferenceExpr),
+    FunctionCallExpr(FunctionCallExpr),
 }
 
 impl PrimaryExpr {
-    pub fn parse(i: &str) -> ParseResult<Box<dyn Expr>> {
+    pub fn parse(i: &str) -> ParseResult<Self> {
         alt((
-                delimited(
+                |i| delimited(
                     preceded(parse_space, char('(')),
                     cut(FilterExpr::parse),
                     cut(preceded(parse_space, char(')'))),
-                ),
-                LiteralString::parse,
-                VariableReferenceExpr::parse,
-                FunctionCallExpr::parse,
+                )(i).map(|(i, expr)| (i, Self::FilterExpr(expr))),
+                |i| LiteralStringExpr::parse(i).map(|(i, expr)| (i, Self::LiteralStringExpr(expr))),
+                |i| VariableReferenceExpr::parse(i).map(|(i, expr)| (i, Self::VariableReferenceExpr(expr))),
+                |i| FunctionCallExpr::parse(i).map(|(i, expr)| (i, Self::FunctionCallExpr(expr))),
         ))(i)
+    }
+}
+
+impl Expr for PrimaryExpr {
+    fn evaluate(&self, ctx: &EvaluationContext) -> Result<Value, EvaluateError> {
+        use PrimaryExpr::*;
+        match self {
+            FilterExpr(expr) => expr.evaluate(ctx),
+            LiteralStringExpr(expr) => expr.evaluate(ctx),
+            VariableReferenceExpr(expr) => expr.evaluate(ctx),
+            FunctionCallExpr(expr) => expr.evaluate(ctx),
+        }
     }
 }
 
@@ -539,14 +578,12 @@ impl Expr for PathStepExpr {
     fn evaluate(&self, ctx: &EvaluationContext) -> Result<Value, EvaluateError> {
         self.step.evaluate(&ctx, &Value::from(""))
     }
-
-    expr_eq!();
 }
 
 #[derive(Debug, Eq)]
 pub struct PathStep {
     pub op: PathStepOperation,
-    pub predicate_exprs: Vec<Box<dyn Expr>>,
+    pub predicate_exprs: Vec<FilterExpr>,
 }
 
 impl PathStep {
@@ -613,8 +650,8 @@ impl PathStep {
         Ok((i, PathStepPatternComponent::Exprs(exprs)))
     }
 
-    fn parse_predicates(i: &str) -> ParseResult<Vec<Box<dyn Expr>>> {
-        let mut predicate_exprs: Vec<Box<dyn Expr>> = Vec::new();
+    fn parse_predicates(i: &str) -> ParseResult<Vec<FilterExpr>> {
+        let mut predicate_exprs: Vec<FilterExpr> = Vec::new();
         let mut next_i = i;
         loop {
             let i = next_i;
@@ -631,7 +668,7 @@ impl PathStep {
         Ok((next_i, predicate_exprs))
     }
 
-    fn evaluate_predicates(ctx: &EvaluationContext, predicate_exprs: &Vec<Box<dyn Expr>>, value: Value) -> Result<Value, EvaluateError> {
+    fn evaluate_predicates(ctx: &EvaluationContext, predicate_exprs: &Vec<FilterExpr>, value: Value) -> Result<Value, EvaluateError> {
         let mut next_value = value;
         for predicate_expr in predicate_exprs {
             let value = next_value;
@@ -672,7 +709,7 @@ pub enum PathStepOperation {
 pub enum PathStepPatternComponent {
     Name(String),
     Regex(String),
-    Exprs(Vec<Box<dyn Expr>>),
+    Exprs(Vec<FilterExpr>),
 }
 
 impl PathStepOperation {
@@ -822,68 +859,15 @@ impl PathStepOperation {
 }
 
 #[derive(Debug, Eq, PartialEq)]
-pub struct LiteralRootPath {
-    pub path: PathBuf
-}
-
-impl LiteralRootPath {
-    #[cfg(not(windows))]
-    pub fn parse_separator_like_root_path(i: &str) -> ParseResult<Box<dyn Expr>> {
-        Self::parse_for_unix(i)
-    }
-
-    #[cfg(windows)]
-    pub fn parse_separator_like_root_path(i: &str) -> ParseResult<Box<dyn Expr>> {
-        Self::parse_for_windows(i)
-    }
-
-    pub fn parse(i: &str) -> ParseResult<Box<dyn Expr>> {
-        let (i, _) = preceded(parse_space, tag("~"))(i)?;
-        Ok((i, Box::new(LiteralRootPath { path: home_dir().unwrap_or(PathBuf::from("/")) })))
-    }
-
-    pub fn parse_for_unix(i: &str) -> ParseResult<Box<dyn Expr>> {
-        let (i, path) = preceded(parse_space, tag("/"))(i)?;
-        Ok((i, Box::new(LiteralRootPath { path: PathBuf::from(path) })))
-    }
-
-    pub fn parse_for_windows(i: &str) -> ParseResult<Box<dyn Expr>> {
-        let (i, path) = preceded(
-            parse_space,
-            recognize(
-                alt((
-                        tag(r"\"),
-                        Self::parse_windows_drive_root,
-                        recognize(pair(alt((tag(r"\\?\"), tag(r"\\.\"))), Self::parse_windows_drive_root)),
-                ))
-            )
-        )(i)?;
-        Ok((i, Box::new(LiteralRootPath { path: PathBuf::from(path) })))
-    }
-
-    fn parse_windows_drive_root(i: &str) -> ParseResult<&str> {
-        recognize(pair(satisfy(|c| 'A' <= c && c <= 'Z'), tag(r":\")))(i)
-    }
-}
-
-impl Expr for LiteralRootPath {
-    fn evaluate(&self, _: &EvaluationContext) -> Result<Value, EvaluateError> {
-        Ok(Value::from([self.path.clone()]))
-    }
-
-    expr_eq!();
-}
-
-#[derive(Debug, Eq, PartialEq)]
 pub struct VariableReferenceExpr {
     pub identifier: String,
 }
 
 impl VariableReferenceExpr {
-    pub fn parse(i: &str) -> ParseResult<Box<dyn Expr>> {
+    pub fn parse(i: &str) -> ParseResult<Self> {
         let (i, identifier) = preceded(preceded(parse_space, char('$')), cut(parse_identifier))(i)?;
         let identifier = identifier.to_string();
-        Ok((i, Box::new(VariableReferenceExpr { identifier })))
+        Ok((i, Self { identifier }))
     }
 }
 
@@ -894,49 +878,30 @@ impl Expr for VariableReferenceExpr {
         };
         Ok(value.clone())
     }
-
-    expr_eq!();
 }
 
 #[derive(Debug, Eq, PartialEq)]
 pub struct FunctionCallExpr {
-    pub identifier: String,
-    pub arg_exprs: Vec<Box<dyn Expr>>,
+    pub function_call: FunctionCall,
 }
 
 impl FunctionCallExpr {
-    pub fn parse(i: &str) -> ParseResult<Box<dyn Expr>> {
-        let (i, FunctionCall { identifier, arg_exprs }) = FunctionCall::parse(i)?;
-        Ok((i, Box::new(FunctionCallExpr { identifier, arg_exprs })))
-    }
-
-    pub fn evaluate_impl(ctx: &EvaluationContext, identifier: &String, self_expr: Option<&Box<dyn Expr>>, arg_exprs: &Vec<Box<dyn Expr>>) -> Result<Value, EvaluateError> {
-        let Some(function) = ctx.get_function(identifier) else {
-            return Err(EvaluateError::FunctionNotFound(identifier.clone()));
-        };
-        let mut arg_values: Vec<Value> = Vec::new();
-        if let Some(self_expr) = self_expr {
-            arg_values.push(self_expr.evaluate(ctx)?);
-        };
-        for expr in arg_exprs {
-            let value = expr.evaluate(ctx)?;
-            arg_values.push(value);
-        }
-        function(ctx, &arg_values)
+    pub fn parse(i: &str) -> ParseResult<Self> {
+        let (i, function_call) = FunctionCall::parse(i)?;
+        Ok((i, Self { function_call }))
     }
 }
 
 impl Expr for FunctionCallExpr {
     fn evaluate(&self, ctx: &EvaluationContext) -> Result<Value, EvaluateError> {
-        FunctionCallExpr::evaluate_impl(ctx, &self.identifier, None, &self.arg_exprs)
+        self.function_call.evaluate(ctx, None)
     }
-
-    expr_eq!();
 }
 
+#[derive(Debug, Eq, PartialEq)]
 pub struct FunctionCall {
     pub identifier: String,
-    arg_exprs: Vec<Box<dyn Expr>>,
+    pub arg_exprs: Vec<FilterExpr>,
 }
 
 impl FunctionCall {
@@ -955,47 +920,72 @@ impl FunctionCall {
 
         Ok((i, FunctionCall { identifier, arg_exprs }))
     }
+
+    pub fn evaluate(&self, ctx: &EvaluationContext, self_value: Option<Value>) -> Result<Value, EvaluateError> {
+        let Some(function) = ctx.get_function(&self.identifier) else {
+            return Err(EvaluateError::FunctionNotFound(self.identifier.clone()));
+        };
+        let mut arg_values: Vec<Value> = Vec::new();
+        if let Some(self_value) = self_value {
+            arg_values.push(self_value);
+        };
+        for expr in &self.arg_exprs {
+            let value = expr.evaluate(ctx)?;
+            arg_values.push(value);
+        }
+        function(ctx, &arg_values)
+    }
 }
 
 #[derive(Debug, Eq, PartialEq)]
-pub struct LiteralString {
+pub struct LiteralStringExpr {
     pub string: String,
 }
 
-impl LiteralString {
-    pub fn parse(i: &str) -> ParseResult<Box<dyn Expr>> {
+impl LiteralStringExpr {
+    pub fn parse(i: &str) -> ParseResult<Self> {
         let (i, quote_char) = preceded(
             parse_space,
             alt((char('"'), char('\'')))
         )(i)?;
         let (i, string) = cut(terminated(take_while(|c| c != quote_char), char(quote_char)))(i)?;
-        Ok((i, Box::new(LiteralString { string: string.to_string() })))
+        Ok((i, Self { string: string.to_string() }))
     }
 }
 
-impl Expr for LiteralString {
+impl Expr for LiteralStringExpr {
     fn evaluate(&self, _: &EvaluationContext) -> Result<Value, EvaluateError> {
         Ok(Value::from(self.string.clone()))
     }
-
-    expr_eq!();
 }
 
-#[derive(Debug, Eq)]
+#[derive(Debug, Eq, PartialEq)]
 pub struct BinaryExpr {
     pub op: BinaryOperator,
-    pub left_expr: Box<dyn Expr>,
-    pub right_expr: Box<dyn Expr>,
+    pub left_expr: BinaryOperandExpr,
+    pub right_expr: BinaryOperandExpr,
 }
 
-impl BinaryExpr {
-    pub fn parse(i: &str) -> ParseResult<Box<dyn Expr>> {
-        let mut stack: Vec<(&str, BinaryOperator, Box<dyn Expr>)> = Vec::new();
+impl Expr for BinaryExpr {
+    fn evaluate(&self, ctx: &EvaluationContext) -> Result<Value, EvaluateError> {
+        Ok(self.op.evaluate(&self.left_expr.evaluate(ctx)?, &self.right_expr.evaluate(ctx)?))
+    }
+}
+
+#[derive(Debug, Eq, PartialEq)]
+pub enum BinaryOperandExpr {
+    BinaryExpr(Box<BinaryExpr>),
+    PathExpr(PathExpr),
+}
+
+impl BinaryOperandExpr {
+    pub fn parse(i: &str) -> ParseResult<Self> {
+        let mut stack: Vec<(&str, BinaryOperator, BinaryOperandExpr)> = Vec::new();
         let mut current_i = i;
         let (i, expr) = loop {
             let i = current_i;
-            let (before_op_i, new_expr) = match PathExpr::parse(i).wrap_failure()? {
-                Ok(r) => r,
+            let (before_op_i, new_expr): (&str, BinaryOperandExpr) = match PathExpr::parse(i).wrap_failure()? {
+                Ok((i, expr)) => (i, BinaryOperandExpr::PathExpr(expr)),
                 Err(err) => {
                     match stack.pop() {
                         Some((i, _, expr)) => break (i, expr),
@@ -1012,7 +1002,8 @@ impl BinaryExpr {
                 match stack.pop() {
                     Some((i, stacked_op, stacked_expr)) => {
                         if new_op.precedence() <= stacked_op.precedence() {
-                            expr = Box::new(BinaryExpr { op: stacked_op, left_expr: stacked_expr, right_expr: expr })
+                            let binary_expr = BinaryExpr { op: stacked_op, left_expr: stacked_expr, right_expr: expr };
+                            expr = BinaryOperandExpr::BinaryExpr(Box::new(binary_expr));
                         }
                         else {
                             stack.push((i, stacked_op, stacked_expr));
@@ -1031,7 +1022,8 @@ impl BinaryExpr {
         loop {
             match stack.pop() {
                 Some((_, stacked_op, stacked_expr)) => {
-                    expr = Box::new(BinaryExpr { op: stacked_op, left_expr: stacked_expr, right_expr: expr });
+                    let binary_expr = BinaryExpr { op: stacked_op, left_expr: stacked_expr, right_expr: expr };
+                    expr = BinaryOperandExpr::BinaryExpr(Box::new(binary_expr));
                 },
                 None => break,
             };
@@ -1041,17 +1033,13 @@ impl BinaryExpr {
     }
 }
 
-impl Expr for BinaryExpr {
+impl Expr for BinaryOperandExpr {
     fn evaluate(&self, ctx: &EvaluationContext) -> Result<Value, EvaluateError> {
-        Ok(self.op.evaluate(&self.left_expr.evaluate(ctx)?, &self.right_expr.evaluate(ctx)?))
-    }
-
-    expr_eq!();
-}
-
-impl PartialEq for BinaryExpr {
-    fn eq(&self, expr: &Self) -> bool {
-        self.op == expr.op && *self.left_expr == *expr.left_expr && *self.right_expr == *expr.right_expr
+        use BinaryOperandExpr::*;
+        match self {
+            BinaryExpr(expr) => expr.evaluate(ctx),
+            PathExpr(expr) => expr.evaluate(ctx),
+        }
     }
 }
 

@@ -38,7 +38,7 @@ fn main() {
         println!("Pasred Expression: {:?}", expr);
     };
 
-    let result = evaluate(&*expr);
+    let result = evaluate(&expr);
     let values = match result {
         Err(e) => {
             println!("Excution Error: {:?}", e);
