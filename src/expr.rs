@@ -12,6 +12,9 @@ use super::{
     primitive::{
         PathExistence,
     },
+    function::{
+        call_function,
+    },
 };
 
 use std::{
@@ -33,8 +36,6 @@ use std::{
 
 use regex;
 use regex::Regex;
-
-use csv;
 
 use nom::{
     bytes::complete::{
@@ -71,193 +72,17 @@ use nom::{
 
 use dirs::home_dir;
 
-pub struct EvaluationContext <'a> {
-    pub parent: Option<Box<&'a EvaluationContext<'a>>>,
-    pub fn_map: HashMap<String, fn(&EvaluationContext, &[Value]) -> Result<Value, EvaluateError>>,
+#[derive(Debug, PartialEq)]
+pub struct EvaluationContext {
     pub var_map: HashMap<String, Value>,
     pub context_value: Value,
 }
 
-impl<'a> EvaluationContext <'a> {
-    pub fn new(context_value: Value) -> EvaluationContext<'a> {
-        let mut ctx = EvaluationContext {
-            parent: None,
-            fn_map: HashMap::new(),
+impl EvaluationContext {
+    pub fn new(context_value: Value) -> EvaluationContext {
+        EvaluationContext {
             var_map: HashMap::new(),
             context_value: context_value,
-        };
-
-        fn fix_first_arg<'a>(ctx: &'a EvaluationContext, vs: &'a [Value], expected_len: usize) -> (&'a Value, &'a [Value]) {
-            if vs.len() < expected_len {
-                (ctx.get_context_value(), vs)
-            } else {
-                (&vs[0], &vs[1..])
-            }
-        }
-
-        ctx.register_function("string", |ctx, vs| {
-            let (value, _) = fix_first_arg(ctx, vs, 1);
-            Ok(value.clone().as_string())
-        });
-        ctx.register_function("number", |ctx, vs| {
-            let (value, _) = fix_first_arg(ctx, vs, 1);
-            Ok(value.clone().as_number())
-        });
-        ctx.register_function("boolean", |ctx, vs| {
-            let (value, _) = fix_first_arg(ctx, vs, 1);
-            Ok(value.clone().as_boolean())
-        });
-        ctx.register_function("path", |ctx, vs| {
-            let (value, _) = fix_first_arg(ctx, vs, 1);
-            Ok(value.clone().as_path())
-        });
-        ctx.register_function("set", |_, vs| {
-            Ok(Value::from(vs))
-        });
-        ctx.register_function("true", |_, _| {
-            Ok(Value::from(true))
-        });
-        ctx.register_function("false", |_, _| {
-            Ok(Value::from(false))
-        });
-        ctx.register_function("not", |ctx, vs| {
-            let (value, _) = fix_first_arg(ctx, vs, 1);
-            let b: bool = value.into();
-            Ok(Value::from(!b))
-        });
-        ctx.register_function("name", |ctx, vs| {
-            let (value, _) = fix_first_arg(ctx, vs, 1);
-            let path: PathBuf = value.into();
-            Ok(match path.file_name() {
-                Some(os_name) => Value::from(os_name.to_string_lossy().into_owned()), // TODO String should be
-                                                                                      // contains OsString
-                None => Value::from(""),
-            })
-        });
-        ctx.register_function("len", |ctx, vs| {
-            let (value, _) = fix_first_arg(ctx, vs, 1);
-            let set: BTreeSet<_> = value.into();
-            Ok(Value::from(set.len()))
-        });
-        ctx.register_function("starts_with", |ctx, vs| {
-            let (value, vs) = fix_first_arg(ctx, vs, 2);
-            let prefix = if 0 == vs.len() {
-                "".to_string()
-            } else {
-                vs[0].clone().into()
-            };
-            let target_str: String = value.into();
-            let result: bool = target_str.starts_with(&prefix);
-            Ok(Value::from(result))
-        });
-        ctx.register_function("dir", |ctx, vs| {
-            let (value, _) = fix_first_arg(ctx, vs, 1);
-            let path: PathBuf = value.into();
-            Ok(match path.parent() {
-                Some(dir) => {
-                    let dir: PathBuf = dir.into();
-                    Value::from(dir)
-                },
-                None => Value::from(PathBuf::from("")),
-            })
-        });
-        ctx.register_function("select", |ctx, vs| {
-            let (value, vs) = fix_first_arg(ctx, vs, 2);
-            Ok(if 0 == vs.len() {
-                value.clone()
-            } else {
-                let result: bool = (&vs[0]).into();
-                if result {
-                    value.clone()
-                } else {
-                    Value::empty_set()
-                }
-            })
-        });
-        ctx.register_function("csv_columns", |ctx, vs| {
-            let (value, vs) = fix_first_arg(ctx, vs, 2);
-            enum ColumnSelector { All, Index(usize) }
-            enum ColumnSelectorOrHeaderName { ColumnSelector(ColumnSelector), HeaderName(String) }
-            let column_selector = if 0 == vs.len() {
-                ColumnSelectorOrHeaderName::ColumnSelector(ColumnSelector::All)
-            } else {
-                let selector_value = &vs[0];
-                if selector_value.likes_number() {
-                    ColumnSelectorOrHeaderName::ColumnSelector(ColumnSelector::Index(selector_value.into()))
-                } else {
-                    ColumnSelectorOrHeaderName::HeaderName(selector_value.into())
-                }
-            };
-            let path: PathBuf = value.into();
-            let mut reader = match csv::ReaderBuilder::new().delimiter(b',').has_headers(false).from_path(&path) {
-                Err(err) => {
-                    match err.kind() {
-                        csv::ErrorKind::Io(io_err) => {
-                            if io_err.kind() == io::ErrorKind::NotFound {
-                                return Ok(Value::empty_set());
-                            } else {
-                                return Err(EvaluateError::CsvReadError(err.to_string()));
-                            }
-                        },
-                        _ => return Err(EvaluateError::CsvReadError(err.to_string())),
-                    }
-                },
-                Ok(reader) => reader,
-            };
-            let mut column_values: BTreeSet<RealValue> = BTreeSet::new();
-            let mut record_iter = reader.records();
-            let column_selector = match column_selector {
-                ColumnSelectorOrHeaderName::ColumnSelector(r) => r,
-                ColumnSelectorOrHeaderName::HeaderName(name) => {
-                    let first_record = record_iter.next();
-                    let first_record = match first_record {
-                        Some(Err(err)) => return Err(EvaluateError::CsvReadError(err.to_string())),
-                        Some(Ok(record)) => record,
-                        None => return Ok(Value::Set(BTreeSet::new(), PathExistence::NotChecked)),
-                    };
-                    match first_record.iter().position(|field| field == name) {
-                        Some(index) => ColumnSelector::Index(index),
-                        None => return Ok(Value::empty_set()),
-                    }
-                },
-            };
-
-            for record in record_iter {
-                let record = match record {
-                    Err(err) => return Err(EvaluateError::CsvReadError(err.to_string())),
-                    Ok(record) => record,
-                };
-                match &column_selector {
-                    ColumnSelector::All => {
-                        column_values.insert(RealValue::String(record.as_slice().to_string()));
-                    },
-                    ColumnSelector::Index(index) => {
-                        match record.get(*index) {
-                            Some(field) => {
-                                column_values.insert(RealValue::String(field.to_string()));
-                            }
-                            None => (),
-                        }
-                    },
-                }
-            }
-            return Ok(Value::Set(column_values, PathExistence::NotChecked));
-        });
-
-        ctx
-    }
-
-    pub fn register_function(&mut self, key: impl AsRef<str>, function: fn(&EvaluationContext, &[Value]) -> Result<Value, EvaluateError>) {
-        self.fn_map.insert(key.as_ref().to_string(), function);
-    }
-
-    pub fn get_function(&self, key: impl AsRef<str>) -> Option<&fn(&EvaluationContext, &[Value]) -> Result<Value, EvaluateError>> {
-        match self.fn_map.get(key.as_ref()) {
-            Some(function) => Some(function),
-            None => match &self.parent {
-                Some(parent) => parent.get_function(key),
-                None => None,
-            },
         }
     }
 
@@ -266,34 +91,25 @@ impl<'a> EvaluationContext <'a> {
     }
 
     pub fn get_variable(&self, key: impl AsRef<str>) -> Option<&Value> {
-        match self.var_map.get(key.as_ref()) {
-            Some(variable) => Some(variable),
-            None => match &self.parent {
-                Some(parent) => parent.get_variable(key),
-                None => None,
-            },
-        }
+        self.var_map.get(key.as_ref())
     }
 
     pub fn get_context_value(&self) -> &Value {
         &self.context_value
     }
 
-    pub fn scope(&'a self, value: &Value, vars: &[(&str, &Value)]) -> Self {
+    pub fn scope(&self, value: &Value, vars: &[(&str, &Value)]) -> Self {
         let parent_dir: PathBuf = self.context_value.clone().into();
         let context_dir: PathBuf = value.into();
 
-        let mut var_map = HashMap::new();
+        let mut var_map = self.var_map.clone();
         for (name, value) in vars {
             var_map.insert(name.to_string(), value.clone().clone());
         }
 
-        Self {
-            parent: Some(Box::new(self)),
-            fn_map: HashMap::new(),
-            var_map: var_map,
-            context_value: Value::from(parent_dir.join(context_dir)),
-        }
+        let context_value = Value::from(parent_dir.join(context_dir));
+
+        Self { var_map, context_value }
     }
 }
 
@@ -330,18 +146,13 @@ impl Expr for FilterExpr {
         let mut expr_iter = self.exprs.iter();
         let mut value = expr_iter.next().expect("more than one exprs").evaluate(ctx)?;
         for expr in expr_iter {
-            if value.is_set() {
-                let mut value_vec = Vec::new();
-                for v in &value {
-                    let ctx = ctx.scope(&v, &[("_", &v)]);
-                    let result_value = expr.evaluate(&ctx)?;
-                    value_vec.push(result_value);
-                }
-                value = Value::from(value_vec);
-            } else {
-                let ctx = ctx.scope(&value, &[("_", &value)]);
-                value = expr.evaluate(&ctx)?;
+            let mut value_vec = Vec::new();
+            for v in &value {
+                let ctx = ctx.scope(&v, &[("_", &v)]);
+                let result_value = expr.evaluate(&ctx)?;
+                value_vec.push(result_value);
             }
+            value = Value::from(value_vec);
         }
         Ok(value)
     }
@@ -922,9 +733,6 @@ impl FunctionCall {
     }
 
     pub fn evaluate(&self, ctx: &EvaluationContext, self_value: Option<Value>) -> Result<Value, EvaluateError> {
-        let Some(function) = ctx.get_function(&self.identifier) else {
-            return Err(EvaluateError::FunctionNotFound(self.identifier.clone()));
-        };
         let mut arg_values: Vec<Value> = Vec::new();
         if let Some(self_value) = self_value {
             arg_values.push(self_value);
@@ -933,7 +741,7 @@ impl FunctionCall {
             let value = expr.evaluate(ctx)?;
             arg_values.push(value);
         }
-        function(ctx, &arg_values)
+        call_function(&self.identifier, ctx, &arg_values)
     }
 }
 

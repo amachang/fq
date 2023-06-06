@@ -2,6 +2,7 @@ mod parse_util;
 mod primitive;
 mod value;
 mod expr;
+mod function;
 
 use std::path::PathBuf;
 
