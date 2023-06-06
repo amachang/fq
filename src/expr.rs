@@ -11,6 +11,7 @@ use super::{
     },
     primitive::{
         PathExistence,
+        Number,
     },
     function::{
         call_function,
@@ -31,6 +32,11 @@ use std::{
     path::{
         Path,
         PathBuf,
+    },
+    hash::{
+        Hash,
+        Hasher,
+        BuildHasher,
     },
 };
 
@@ -72,7 +78,7 @@ use nom::{
 
 use dirs::home_dir;
 
-#[derive(Debug, PartialEq)]
+#[derive(Debug)]
 pub struct EvaluationContext {
     pub var_map: HashMap<String, Value>,
     pub context_value: Value,
@@ -111,9 +117,74 @@ impl EvaluationContext {
 
         Self { var_map, context_value }
     }
+
+    fn exactly_eq_value(self_value: &Value, other_value: &Value) -> bool {
+        match (self_value, other_value) {
+            (Value::Boolean(r), Value::Boolean(l)) => r == l,
+            (Value::String(r), Value::String(l)) => r == l,
+            (Value::Set(r, r_e), Value::Set(l, l_e)) => r == l && r_e == l_e,
+            (Value::Path(r), Value::Path(l)) => r == l,
+            (Value::Number(Number::Integer(r)), Value::Number(Number::Integer(l))) => r == l,
+            (Value::Number(Number::Float(r)), Value::Number(Number::Float(l))) => {
+                if r.is_nan() && l.is_nan() {
+                    true
+                } else {
+                    r == l
+                }
+            },
+            _ => false,
+        }
+    }
+
+    fn hash_value<H: Hasher>(value: &Value, state: &mut H) {
+        match value {
+            Value::Boolean(b) => b.hash(state),
+            Value::String(s) => s.hash(state),
+            Value::Set(s, e) => {
+                s.hash(state);
+                e.hash(state);
+            },
+            Value::Path(p) => p.hash(state),
+            Value::Number(Number::Integer(i)) => i.hash(state),
+            Value::Number(Number::Float(f)) => f.to_bits().hash(state),
+        }
+    }
 }
 
-#[derive(Debug, Eq, PartialEq)]
+impl PartialEq for EvaluationContext {
+    fn eq(&self, other: &EvaluationContext) -> bool {
+        if self.var_map.len() != other.var_map.len() {
+            return false;
+        };
+
+        if !self.var_map.iter().all(|(key, value)| other.var_map.get(key).map_or(false, |v| Self::exactly_eq_value(value, v))) {
+            return false;
+        };
+
+        Self::exactly_eq_value(&self.context_value, &other.context_value)
+    }
+}
+
+impl Eq for EvaluationContext {
+}
+
+impl Hash for EvaluationContext {
+    fn hash<H: Hasher>(&self, state: &mut H) {
+        let mut v = self.var_map.iter().map(|(key, val)| {
+            let mut st = self.var_map.hasher().build_hasher();
+            key.hash(&mut st);
+            (st.finish(), key, val)
+        }).collect::<Vec<_>>();
+        v.sort_by_key(|(h, _, _)| *h);
+
+        for (_, key, val) in v.iter() {
+            key.hash(state);
+            Self::hash_value(val, state);
+        }
+    }
+}
+
+#[derive(Debug, Hash, Eq, PartialEq)]
 pub enum EvaluateError {
     FunctionNotFound(String),
     VariableNotFound(String),
@@ -129,7 +200,7 @@ pub fn parse(i: &str) -> ParseResult<FilterExpr> {
     FilterExpr::parse(i)
 }
 
-#[derive(Debug, Eq, PartialEq)]
+#[derive(Debug, Hash, Eq, PartialEq)]
 pub struct FilterExpr {
     pub exprs: Vec<BinaryOperandExpr>,
 }
@@ -158,7 +229,7 @@ impl Expr for FilterExpr {
     }
 }
 
-#[derive(Debug, Eq, PartialEq)]
+#[derive(Debug, Hash, Eq, PartialEq)]
 pub struct PathExpr {
     pub root_expr: PathRootStepExpr,
     pub steps: Vec<PathStep>,
@@ -209,7 +280,7 @@ impl Expr for PathExpr {
     }
 }
 
-#[derive(Debug, Eq, PartialEq)]
+#[derive(Debug, Hash, Eq, PartialEq)]
 pub struct PathRootStepExpr {
     pub expr: PathRootExpr,
     pub predicate_exprs: Vec<FilterExpr>,
@@ -242,7 +313,7 @@ impl Expr for PathRootStepExpr {
     }
 }
 
-#[derive(Debug, Eq, PartialEq)]
+#[derive(Debug, Hash, Eq, PartialEq)]
 pub enum PathRootExpr {
     MemberCallExpr(MemberCallExpr),
     LiteralPathRootExpr(LiteralPathRootExpr),
@@ -260,7 +331,7 @@ impl Expr for PathRootExpr {
     }
 }
 
-#[derive(Debug, Eq, PartialEq)]
+#[derive(Debug, Hash, Eq, PartialEq)]
 pub struct LiteralPathRootExpr {
     pub path: PathBuf
 }
@@ -311,7 +382,7 @@ impl Expr for LiteralPathRootExpr {
     }
 }
 
-#[derive(Debug, Eq, PartialEq)]
+#[derive(Debug, Hash, Eq, PartialEq)]
 pub struct MemberCallExpr {
     pub expr: PrimaryExpr,
     pub function_calls: Vec<FunctionCall>,
@@ -345,7 +416,7 @@ impl Expr for MemberCallExpr {
     }
 }
 
-#[derive(Debug, Eq, PartialEq)]
+#[derive(Debug, Hash, Eq, PartialEq)]
 pub enum PrimaryExpr {
     FilterExpr(FilterExpr),
     LiteralStringExpr(LiteralStringExpr),
@@ -380,7 +451,7 @@ impl Expr for PrimaryExpr {
     }
 }
 
-#[derive(Debug, Eq, PartialEq)]
+#[derive(Debug, Hash, Eq, PartialEq)]
 pub struct PathStepExpr {
     pub step: PathStep,
 }
@@ -391,7 +462,7 @@ impl Expr for PathStepExpr {
     }
 }
 
-#[derive(Debug, Eq)]
+#[derive(Debug, Hash, Eq, PartialEq)]
 pub struct PathStep {
     pub op: PathStepOperation,
     pub predicate_exprs: Vec<FilterExpr>,
@@ -504,19 +575,13 @@ impl PathStep {
     }
 }
 
-impl PartialEq for PathStep {
-    fn eq(&self, expr: &Self) -> bool {
-        self.op == expr.op && self.predicate_exprs == expr.predicate_exprs
-    }
-}
-
-#[derive(Debug, Eq, PartialEq)]
+#[derive(Debug, Hash, Eq, PartialEq)]
 pub enum PathStepOperation {
     Recursive,
     Pattern(Vec<PathStepPatternComponent>),
 }
 
-#[derive(Debug, Eq, PartialEq)]
+#[derive(Debug, Hash, Eq, PartialEq)]
 pub enum PathStepPatternComponent {
     Name(String),
     Regex(String),
@@ -669,7 +734,7 @@ impl PathStepOperation {
     }
 }
 
-#[derive(Debug, Eq, PartialEq)]
+#[derive(Debug, Hash, Eq, PartialEq)]
 pub struct VariableReferenceExpr {
     pub identifier: String,
 }
@@ -691,7 +756,7 @@ impl Expr for VariableReferenceExpr {
     }
 }
 
-#[derive(Debug, Eq, PartialEq)]
+#[derive(Debug, Hash, Eq, PartialEq)]
 pub struct FunctionCallExpr {
     pub function_call: FunctionCall,
 }
@@ -709,7 +774,7 @@ impl Expr for FunctionCallExpr {
     }
 }
 
-#[derive(Debug, Eq, PartialEq)]
+#[derive(Debug, Hash, Eq, PartialEq)]
 pub struct FunctionCall {
     pub identifier: String,
     pub arg_exprs: Vec<FilterExpr>,
@@ -745,7 +810,7 @@ impl FunctionCall {
     }
 }
 
-#[derive(Debug, Eq, PartialEq)]
+#[derive(Debug, Hash, Eq, PartialEq)]
 pub struct LiteralStringExpr {
     pub string: String,
 }
@@ -767,7 +832,7 @@ impl Expr for LiteralStringExpr {
     }
 }
 
-#[derive(Debug, Eq, PartialEq)]
+#[derive(Debug, Hash, Eq, PartialEq)]
 pub struct BinaryExpr {
     pub op: BinaryOperator,
     pub left_expr: BinaryOperandExpr,
@@ -780,7 +845,7 @@ impl Expr for BinaryExpr {
     }
 }
 
-#[derive(Debug, Eq, PartialEq)]
+#[derive(Debug, Hash, Eq, PartialEq)]
 pub enum BinaryOperandExpr {
     BinaryExpr(Box<BinaryExpr>),
     PathExpr(PathExpr),
@@ -851,7 +916,7 @@ impl Expr for BinaryOperandExpr {
     }
 }
 
-#[derive(Debug, Eq, PartialEq)]
+#[derive(Debug, Hash, Eq, PartialEq)]
 pub enum BinaryOperator {
     Division,
     Modulus,
