@@ -1,7 +1,4 @@
-use fq::{
-    parse,
-    evaluate,
-};
+use fq::*;
 
 use nom::{
     error::convert_error,
@@ -19,6 +16,9 @@ struct Args {
 
     #[arg(long, action = ArgAction::SetTrue)]
     show_parsed_expr: bool,
+
+    #[arg(long, action = ArgAction::SetTrue)]
+    no_memoize: bool,
 }
 
 fn main() {
@@ -38,7 +38,13 @@ fn main() {
         println!("Pasred Expression: {:?}", expr);
     };
 
-    let result = evaluate(&expr);
+    let result = if args.no_memoize {
+        println!("no memoization"); 
+        evaluate(&expr)
+    } else {
+        println!("with memoization"); 
+        evaluate_with_cache(&expr)
+    };
     let values = match result {
         Err(e) => {
             println!("Excution Error: {:?}", e);

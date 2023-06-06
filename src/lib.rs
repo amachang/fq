@@ -35,6 +35,12 @@ pub fn evaluate(expr: &FilterExpr) -> Result<Value, EvaluateError> {
     expr.evaluate(&ctx)
 }
 
+pub fn evaluate_with_cache(expr: &FilterExpr) -> Result<Value, EvaluateError> {
+    let mut cache = MemoizationCache::new();
+    let ctx = EvaluationContext::new(Value::from(PathBuf::from("")));
+    expr.evaluate_then_cache(&ctx, &mut cache)
+}
+
 pub fn query(i: &str) -> Result<Vec<PathBuf>, Error> {
     let expr = parse(i).map_err(|e| Error::ParseError(e))?;
     let values = evaluate(&expr).map_err(|e| Error::EvaluateError(e))?;

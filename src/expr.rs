@@ -21,6 +21,7 @@ use super::{
 use std::{
     fmt::Debug,
     collections::{
+        hash_map::Entry,
         HashMap,
     },
     collections::{
@@ -192,8 +193,40 @@ pub enum EvaluateError {
     CsvReadError(String),
 }
 
+pub type MemoizationCache<'a> = HashMap<MemoizationKey<'a>, Value>;
+
+#[derive(Debug, Hash, Eq, PartialEq)]
+pub enum MemoizationKey<'a> {
+    FilterExpr(&'a FilterExpr, &'a EvaluationContext),
+    PathExpr(&'a PathExpr, &'a EvaluationContext),
+    PathRootStepExpr(&'a PathRootStepExpr, &'a EvaluationContext),
+    PathRootExpr(&'a PathRootExpr, &'a EvaluationContext),
+    LiteralPathRootExpr(&'a LiteralPathRootExpr, &'a EvaluationContext),
+    MemberCallExpr(&'a MemberCallExpr, &'a EvaluationContext),
+    PrimaryExpr(&'a PrimaryExpr, &'a EvaluationContext),
+    PathStepExpr(&'a PathStepExpr, &'a EvaluationContext),
+    VariableReferenceExpr(&'a VariableReferenceExpr, &'a EvaluationContext),
+    FunctionCallExpr(&'a FunctionCallExpr, &'a EvaluationContext),
+    LiteralStringExpr(&'a LiteralStringExpr, &'a EvaluationContext),
+    BinaryExpr(&'a BinaryExpr, &'a EvaluationContext),
+    BinaryOperandExpr(&'a BinaryOperandExpr, &'a EvaluationContext),
+}
+
 pub trait Expr: Debug {
     fn evaluate(&self, ctx: &EvaluationContext) -> Result<Value, EvaluateError>;
+
+    fn evaluate_then_cache<'a>(&'a self, ctx: &'a EvaluationContext, cache: &'a mut MemoizationCache<'a>) -> Result<Value, EvaluateError> {
+        let value = match cache.entry(self.memoization_key(ctx)) {
+            Entry::Occupied(entry) => entry.into_mut(),
+            Entry::Vacant(entry) => {
+                let value = self.evaluate(ctx)?;
+                entry.insert(value)
+            },
+        };
+        Ok(value.clone())
+    }
+
+    fn memoization_key<'a>(&'a self, ctx: &'a EvaluationContext) -> MemoizationKey;
 }
 
 pub fn parse(i: &str) -> ParseResult<FilterExpr> {
@@ -226,6 +259,10 @@ impl Expr for FilterExpr {
             value = Value::from(value_vec);
         }
         Ok(value)
+    }
+
+    fn memoization_key<'a>(&'a self, ctx: &'a EvaluationContext) -> MemoizationKey {
+        MemoizationKey::FilterExpr(self, ctx)
     }
 }
 
@@ -278,6 +315,10 @@ impl Expr for PathExpr {
         };
         return Ok(value)
     }
+
+    fn memoization_key<'a>(&'a self, ctx: &'a EvaluationContext) -> MemoizationKey {
+        MemoizationKey::PathExpr(self, ctx)
+    }
 }
 
 #[derive(Debug, Hash, Eq, PartialEq)]
@@ -311,6 +352,10 @@ impl Expr for PathRootStepExpr {
         let value = PathStep::evaluate_predicates(ctx, &self.predicate_exprs, value)?;
         Ok(value)
     }
+
+    fn memoization_key<'a>(&'a self, ctx: &'a EvaluationContext) -> MemoizationKey {
+        MemoizationKey::PathRootStepExpr(self, ctx)
+    }
 }
 
 #[derive(Debug, Hash, Eq, PartialEq)]
@@ -328,6 +373,10 @@ impl Expr for PathRootExpr {
             LiteralPathRootExpr(expr) => expr.evaluate(ctx),
             PathStep(step) => step.evaluate(ctx, &Value::from("")),
         }
+    }
+
+    fn memoization_key<'a>(&'a self, ctx: &'a EvaluationContext) -> MemoizationKey {
+        MemoizationKey::PathRootExpr(self, ctx)
     }
 }
 
@@ -380,6 +429,10 @@ impl Expr for LiteralPathRootExpr {
     fn evaluate(&self, _: &EvaluationContext) -> Result<Value, EvaluateError> {
         Ok(Value::from(self.path.clone()))
     }
+
+    fn memoization_key<'a>(&'a self, ctx: &'a EvaluationContext) -> MemoizationKey {
+        MemoizationKey::LiteralPathRootExpr(self, ctx)
+    }
 }
 
 #[derive(Debug, Hash, Eq, PartialEq)]
@@ -413,6 +466,10 @@ impl Expr for MemberCallExpr {
             value = function_call.evaluate(ctx, Some(value))?;
         };
         Ok(value)
+    }
+
+    fn memoization_key<'a>(&'a self, ctx: &'a EvaluationContext) -> MemoizationKey {
+        MemoizationKey::MemberCallExpr(self, ctx)
     }
 }
 
@@ -449,6 +506,10 @@ impl Expr for PrimaryExpr {
             FunctionCallExpr(expr) => expr.evaluate(ctx),
         }
     }
+
+    fn memoization_key<'a>(&'a self, ctx: &'a EvaluationContext) -> MemoizationKey {
+        MemoizationKey::PrimaryExpr(self, ctx)
+    }
 }
 
 #[derive(Debug, Hash, Eq, PartialEq)]
@@ -459,6 +520,10 @@ pub struct PathStepExpr {
 impl Expr for PathStepExpr {
     fn evaluate(&self, ctx: &EvaluationContext) -> Result<Value, EvaluateError> {
         self.step.evaluate(&ctx, &Value::from(""))
+    }
+
+    fn memoization_key<'a>(&'a self, ctx: &'a EvaluationContext) -> MemoizationKey {
+        MemoizationKey::PathStepExpr(self, ctx)
     }
 }
 
@@ -754,6 +819,10 @@ impl Expr for VariableReferenceExpr {
         };
         Ok(value.clone())
     }
+
+    fn memoization_key<'a>(&'a self, ctx: &'a EvaluationContext) -> MemoizationKey {
+        MemoizationKey::VariableReferenceExpr(self, ctx)
+    }
 }
 
 #[derive(Debug, Hash, Eq, PartialEq)]
@@ -771,6 +840,10 @@ impl FunctionCallExpr {
 impl Expr for FunctionCallExpr {
     fn evaluate(&self, ctx: &EvaluationContext) -> Result<Value, EvaluateError> {
         self.function_call.evaluate(ctx, None)
+    }
+
+    fn memoization_key<'a>(&'a self, ctx: &'a EvaluationContext) -> MemoizationKey {
+        MemoizationKey::FunctionCallExpr(self, ctx)
     }
 }
 
@@ -830,6 +903,10 @@ impl Expr for LiteralStringExpr {
     fn evaluate(&self, _: &EvaluationContext) -> Result<Value, EvaluateError> {
         Ok(Value::from(self.string.clone()))
     }
+
+    fn memoization_key<'a>(&'a self, ctx: &'a EvaluationContext) -> MemoizationKey {
+        MemoizationKey::LiteralStringExpr(self, ctx)
+    }
 }
 
 #[derive(Debug, Hash, Eq, PartialEq)]
@@ -842,6 +919,10 @@ pub struct BinaryExpr {
 impl Expr for BinaryExpr {
     fn evaluate(&self, ctx: &EvaluationContext) -> Result<Value, EvaluateError> {
         Ok(self.op.evaluate(&self.left_expr.evaluate(ctx)?, &self.right_expr.evaluate(ctx)?))
+    }
+
+    fn memoization_key<'a>(&'a self, ctx: &'a EvaluationContext) -> MemoizationKey {
+        MemoizationKey::BinaryExpr(self, ctx)
     }
 }
 
@@ -913,6 +994,10 @@ impl Expr for BinaryOperandExpr {
             BinaryExpr(expr) => expr.evaluate(ctx),
             PathExpr(expr) => expr.evaluate(ctx),
         }
+    }
+
+    fn memoization_key<'a>(&'a self, ctx: &'a EvaluationContext) -> MemoizationKey {
+        MemoizationKey::BinaryOperandExpr(self, ctx)
     }
 }
 
