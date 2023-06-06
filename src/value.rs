@@ -24,6 +24,7 @@ use std::{
         Mul,
     },
     path::PathBuf,
+    borrow::Cow,
 };
 
 #[derive(Debug, Clone)]
@@ -44,8 +45,14 @@ impl PartialEq for Value {
             (String(r), String(l)) => r == l,
             (Set(r, _), Set(l, _)) => r == l,
             (Path(r), Path(l)) => r == l,
-            (_, Number(_)) => &self.clone().as_number() == value,
-            (Number(_), _) => self == &value.clone().as_number(),
+            (_, Number(_)) => match self.as_number() {
+                Cow::Borrowed(number_value) => number_value == value,
+                Cow::Owned(number_value) => &number_value == value,
+            },
+            (Number(_), _) => match value.as_number() {
+                Cow::Borrowed(number_value) => self == number_value,
+                Cow::Owned(number_value) => self == &number_value,
+            },
             _ => false,
         }
     }
@@ -64,6 +71,7 @@ pub enum RealValueError {
     EmptySet,
 }
 
+
 impl Value {
     pub fn empty_set() -> Value {
         return Value::Set(BTreeSet::new(), PathExistence::NotChecked);
@@ -74,50 +82,50 @@ impl Value {
         v.is_nan()
     }
 
-    pub fn as_string(self) -> Self {
+    pub fn as_string(&self) -> Cow<Self> {
         match self {
-            Value::String(_) => self,
+            Value::String(_) => Cow::Borrowed(self),
             _ => {
                 let v: String = self.into();
-                Value::from(v)
+                Cow::Owned(Value::from(v))
             },
         }
     }
 
-    pub fn as_number(self) -> Self {
+    pub fn as_number(&self) -> Cow<Self> {
         match self {
-            Value::Number(_) => self,
+            Value::Number(_) => Cow::Borrowed(self),
             _ => {
                 let v: Number = self.into();
-                Value::from(v)
+                Cow::Owned(Value::from(v))
             },
         }
     }
 
-    pub fn as_boolean(self) -> Self {
+    pub fn as_boolean(&self) -> Cow<Self> {
         match self {
-            Value::Boolean(_) => self,
+            Value::Boolean(_) => Cow::Borrowed(self),
             _ => {
                 let v: bool = self.into();
-                Value::from(v)
+                Cow::Owned(Value::from(v))
             },
         }
     }
 
-    pub fn as_path(self) -> Self {
+    pub fn as_path(&self) -> Cow<Self> {
         match self {
-            Value::Path(_) => self,
+            Value::Path(_) => Cow::Borrowed(self),
             _ => {
                 let v: PathBuf = self.into();
-                Value::from(v)
+                Cow::Owned(Value::from(v))
             },
         }
     }
 
-    pub fn as_set(self) -> Self {
+    pub fn as_set(&self) -> Cow<Self> {
         match self {
-            Value::Set(_, _) => self,
-            _ => Value::from([self.clone()]),
+            Value::Set(_, _) => Cow::Borrowed(self),
+            _ => Cow::Owned(Value::from([self.clone()])),
         }
     }
 
@@ -450,7 +458,7 @@ impl Into<BTreeSet<RealValue>> for &Value {
     fn into(self) -> BTreeSet<RealValue> {
         match self {
             Value::Set(set, _) => set.clone(),
-            _ => self.clone().as_set().into(),
+            _ => self.as_set().into_owned().into(),
         }
     }
 }

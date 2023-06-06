@@ -26,19 +26,19 @@ pub fn call_function(identifier: &str, ctx: &EvaluationContext, vs: &[Value]) ->
     match identifier {
         "string" => {
             let (value, _) = fix_first_arg(ctx, vs, 1);
-            Ok(value.clone().as_string())
+            Ok(value.as_string().into_owned())
         },
         "number" => {
             let (value, _) = fix_first_arg(ctx, vs, 1);
-            Ok(value.clone().as_number())
+            Ok(value.as_number().into_owned())
         },
         "boolean" => {
             let (value, _) = fix_first_arg(ctx, vs, 1);
-            Ok(value.clone().as_boolean())
+            Ok(value.as_boolean().into_owned())
         },
         "path" => {
             let (value, _) = fix_first_arg(ctx, vs, 1);
-            Ok(value.clone().as_path())
+            Ok(value.as_path().into_owned())
         },
         "set" => {
             let vs: Vec<Value> = vs.iter().map(|v| (*v).clone()).collect();
