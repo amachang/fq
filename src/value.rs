@@ -12,8 +12,8 @@ use std::{
     },
     cmp::Ordering,
     collections::{
-        BTreeSet,
-        btree_set,
+        HashSet,
+        hash_set,
     },
     ops::{
         Neg,
@@ -33,7 +33,7 @@ pub enum Value {
     Boolean(bool),
     String(String),
     Path(PathBuf),
-    Set(BTreeSet<RealValue>, PathExistence),
+    Set(HashSet<RealValue>, PathExistence),
 }
 
 impl PartialEq for Value {
@@ -74,7 +74,7 @@ pub enum RealValueError {
 
 impl Value {
     pub fn empty_set() -> Value {
-        return Value::Set(BTreeSet::new(), PathExistence::NotChecked);
+        return Value::Set(HashSet::new(), PathExistence::NotChecked);
     }
 
     pub fn is_nan(&self) -> bool {
@@ -297,7 +297,7 @@ impl From<PathBuf> for Value {
 
 impl From<Vec<Value>> for Value {
     fn from(vs: Vec<Value>) -> Self {
-        let (real_values, existence) = vs.iter().fold((BTreeSet::new(), PathExistence::Checked), |(mut all_real_values, all_existence), v| {
+        let (real_values, existence) = vs.iter().fold((HashSet::new(), PathExistence::Checked), |(mut all_real_values, all_existence), v| {
             match v {
                 Value::Set(new_real_values, existence) => {
                     all_real_values.extend(new_real_values.clone());
@@ -352,7 +352,7 @@ impl<const N: usize> From<[Value; N]> for Value {
 
 impl<const N: usize> From<[i64; N]> for Value {
     fn from(is: [i64; N]) -> Self {
-        let mut values = BTreeSet::new();
+        let mut values = HashSet::new();
         for i in is {
             match RealNumber::try_from(Number::from(i)) {
                 Ok(real_number) => {
@@ -367,7 +367,7 @@ impl<const N: usize> From<[i64; N]> for Value {
 
 impl<const N: usize> From<[f64; N]> for Value {
     fn from(fs: [f64; N]) -> Self {
-        let mut values = BTreeSet::new();
+        let mut values = HashSet::new();
         for f in fs {
             match RealNumber::try_from(Number::from(f)) {
                 Ok(real_number) => {
@@ -382,7 +382,7 @@ impl<const N: usize> From<[f64; N]> for Value {
 
 impl<const N: usize> From<[bool; N]> for Value {
     fn from(bs: [bool; N]) -> Self {
-        let mut values = BTreeSet::new();
+        let mut values = HashSet::new();
         for b in bs {
             values.insert(RealValue::Boolean(b));
         };
@@ -392,7 +392,7 @@ impl<const N: usize> From<[bool; N]> for Value {
 
 impl<const N: usize> From<[&str; N]> for Value {
     fn from(ss: [&str; N]) -> Self {
-        let mut values = BTreeSet::new();
+        let mut values = HashSet::new();
         for s in ss {
             values.insert(RealValue::String(s.to_string()));
         };
@@ -402,7 +402,7 @@ impl<const N: usize> From<[&str; N]> for Value {
 
 impl<const N: usize> From<[PathBuf; N]> for Value {
     fn from(ps: [PathBuf; N]) -> Self {
-        let mut values = BTreeSet::new();
+        let mut values = HashSet::new();
         for p in ps {
             values.insert(RealValue::Path(p));
         };
@@ -411,7 +411,7 @@ impl<const N: usize> From<[PathBuf; N]> for Value {
 }
 
 pub enum ValueIterator<'a> {
-    SetIterator(btree_set::Iter<'a, RealValue>),
+    SetIterator(hash_set::Iter<'a, RealValue>),
     SingleIterator(&'a Value, bool),
 }
 
@@ -448,14 +448,14 @@ impl<'a> IntoIterator for &'a Value {
     }
 }
 
-impl Into<BTreeSet<RealValue>> for Value {
-    fn into(self) -> BTreeSet<RealValue> {
+impl Into<HashSet<RealValue>> for Value {
+    fn into(self) -> HashSet<RealValue> {
         (&self).into()
     }
 }
 
-impl Into<BTreeSet<RealValue>> for &Value {
-    fn into(self) -> BTreeSet<RealValue> {
+impl Into<HashSet<RealValue>> for &Value {
+    fn into(self) -> HashSet<RealValue> {
         match self {
             Value::Set(set, _) => set.clone(),
             _ => self.as_set().into_owned().into(),
@@ -463,7 +463,7 @@ impl Into<BTreeSet<RealValue>> for &Value {
     }
 }
 
-fn convert_set_to_single_value(set: &BTreeSet<RealValue>) -> Option<Value> {
+fn convert_set_to_single_value(set: &HashSet<RealValue>) -> Option<Value> {
     Some(set.iter().cloned().next()?.into())
 }
 

@@ -14,7 +14,9 @@ use super::{
 
 use std::{
     io,
-    collections::BTreeSet,
+    collections::{
+        HashSet,
+    },
     path::{
         PathBuf,
     },
@@ -66,7 +68,7 @@ pub fn call_function(identifier: &str, ctx: &EvaluationContext, vs: &[Value]) ->
         },
         "len" => {
             let (value, _) = fix_first_arg(ctx, vs, 1);
-            let set: BTreeSet<_> = value.into();
+            let set: HashSet<_> = value.into();
             Ok(Value::from(set.len()))
         },
         "starts_with" => {
@@ -134,7 +136,7 @@ pub fn call_function(identifier: &str, ctx: &EvaluationContext, vs: &[Value]) ->
                 },
                 Ok(reader) => reader,
             };
-            let mut column_values: BTreeSet<RealValue> = BTreeSet::new();
+            let mut column_values: HashSet<RealValue> = HashSet::new();
             let mut record_iter = reader.records();
             let column_selector = match column_selector {
                 ColumnSelectorOrHeaderName::ColumnSelector(r) => r,
@@ -143,7 +145,7 @@ pub fn call_function(identifier: &str, ctx: &EvaluationContext, vs: &[Value]) ->
                     let first_record = match first_record {
                         Some(Err(err)) => return Err(EvaluateError::CsvReadError(err.to_string())),
                         Some(Ok(record)) => record,
-                        None => return Ok(Value::Set(BTreeSet::new(), PathExistence::NotChecked)),
+                        None => return Ok(Value::Set(HashSet::new(), PathExistence::NotChecked)),
                     };
                     match first_record.iter().position(|field| field == name) {
                         Some(index) => ColumnSelector::Index(index),

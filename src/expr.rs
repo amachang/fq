@@ -25,7 +25,7 @@ use std::{
         HashMap,
     },
     collections::{
-        BTreeSet,
+        HashSet,
     },
     io,
     fs,
@@ -142,8 +142,8 @@ impl EvaluationContext {
             Value::Boolean(b) => b.hash(state),
             Value::String(s) => s.hash(state),
             Value::Set(s, e) => {
-                s.hash(state);
                 e.hash(state);
+                s.into_iter().collect::<Vec<_>>().sort().hash(state)
             },
             Value::Path(p) => p.hash(state),
             Value::Number(Number::Integer(i)) => i.hash(state),
@@ -662,7 +662,7 @@ impl PathStepOperation {
     }
 
     fn evaluate_recursive(values: &Value) -> Result<Value, EvaluateError> {
-        let mut result_path_values = BTreeSet::new();
+        let mut result_path_values = HashSet::new();
         for value in values {
             let path: PathBuf = value.into();
             if is_dir(&path) {
@@ -673,7 +673,7 @@ impl PathStepOperation {
         Ok(Value::Set(result_path_values, PathExistence::Checked))
     }
 
-    fn get_descendant_path_values(dir: impl AsRef<Path>, result_path_values: &mut BTreeSet<RealValue>) -> Result<(), EvaluateError> {
+    fn get_descendant_path_values(dir: impl AsRef<Path>, result_path_values: &mut HashSet<RealValue>) -> Result<(), EvaluateError> {
         let dir = dir.as_ref();
         let dir_entries = read_dir(dir).map_err(|e| EvaluateError::CouldntReadDir(e.kind(), e.to_string()))?;
         for dir_entry in dir_entries {
@@ -706,7 +706,7 @@ impl PathStepOperation {
             Exprs(Vec<String>),
         }
 
-        let mut result_values = BTreeSet::new();
+        let mut result_values = HashSet::new();
 
         for context_value in values {
             let ctx = ctx.scope(&context_value, &[]);
