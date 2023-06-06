@@ -39,10 +39,8 @@ fn main() {
     };
 
     let result = if args.no_memoize {
-        println!("no memoization"); 
         evaluate(&expr)
     } else {
-        println!("with memoization"); 
         evaluate_with_cache(&expr)
     };
     let values = match result {
