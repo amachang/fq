@@ -23,6 +23,7 @@ use std::{
 };
 
 use csv;
+use mime_guess;
 
 pub fn call_function(identifier: &str, ctx: &EvaluationContext, vs: &[Value]) -> Result<Value, EvaluateError> {
     match identifier {
@@ -128,10 +129,10 @@ pub fn call_function(identifier: &str, ctx: &EvaluationContext, vs: &[Value]) ->
                             if io_err.kind() == io::ErrorKind::NotFound {
                                 return Ok(Value::empty_set());
                             } else {
-                                return Err(EvaluateError::CsvReadError(err.to_string()));
+                                return Err(EvaluateError::CsvReadError(path, err.to_string()));
                             }
                         },
-                        _ => return Err(EvaluateError::CsvReadError(err.to_string())),
+                        _ => return Err(EvaluateError::CsvReadError(path, err.to_string())),
                     }
                 },
                 Ok(reader) => reader,
@@ -143,7 +144,7 @@ pub fn call_function(identifier: &str, ctx: &EvaluationContext, vs: &[Value]) ->
                 ColumnSelectorOrHeaderName::HeaderName(name) => {
                     let first_record = record_iter.next();
                     let first_record = match first_record {
-                        Some(Err(err)) => return Err(EvaluateError::CsvReadError(err.to_string())),
+                        Some(Err(err)) => return Err(EvaluateError::CsvReadError(path, err.to_string())),
                         Some(Ok(record)) => record,
                         None => return Ok(Value::Set(HashSet::new(), PathExistence::NotChecked)),
                     };
@@ -156,7 +157,7 @@ pub fn call_function(identifier: &str, ctx: &EvaluationContext, vs: &[Value]) ->
 
             for record in record_iter {
                 let record = match record {
-                    Err(err) => return Err(EvaluateError::CsvReadError(err.to_string())),
+                    Err(err) => return Err(EvaluateError::CsvReadError(path, err.to_string())),
                     Ok(record) => record,
                 };
                 match &column_selector {
@@ -174,6 +175,12 @@ pub fn call_function(identifier: &str, ctx: &EvaluationContext, vs: &[Value]) ->
                 }
             }
             return Ok(Value::Set(column_values, PathExistence::NotChecked));
+        },
+        "mime" => {
+            let (value, _) = fix_first_arg(ctx, vs, 1);
+            let path: PathBuf = value.into();
+            let mime = mime_guess::from_path(&path);
+            return Ok(Value::from(mime.first_or_octet_stream().essence_str()))
         },
         _ => Err(EvaluateError::FunctionNotFound(identifier.to_string())),
     }

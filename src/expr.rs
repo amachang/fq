@@ -189,8 +189,8 @@ impl Hash for EvaluationContext {
 pub enum EvaluateError {
     FunctionNotFound(String),
     VariableNotFound(String),
-    CouldntReadDir(io::ErrorKind, String),
-    CsvReadError(String),
+    CouldntReadDir(io::ErrorKind, PathBuf, String),
+    CsvReadError(PathBuf, String),
 }
 
 pub type MemoizationCache<'a> = HashMap<MemoizationKey<'a>, Value>;
@@ -675,9 +675,18 @@ impl PathStepOperation {
 
     fn get_descendant_path_values(dir: impl AsRef<Path>, result_path_values: &mut HashSet<RealValue>) -> Result<(), EvaluateError> {
         let dir = dir.as_ref();
-        let dir_entries = read_dir(dir).map_err(|e| EvaluateError::CouldntReadDir(e.kind(), e.to_string()))?;
+        let dir_entries = match read_dir(dir) {
+            Err(e) => {
+                if e.kind() == io::ErrorKind::PermissionDenied {
+                    eprintln!("WARNING: {:?} in read_dir({})", e.kind(), dir.to_string_lossy());
+                    return Ok(());
+                }
+                return Err(EvaluateError::CouldntReadDir(e.kind(), dir.into(), e.to_string()));
+            },
+            Ok(dir_entries) => dir_entries,
+        };
         for dir_entry in dir_entries {
-            let dir_entry = dir_entry.map_err(|e| EvaluateError::CouldntReadDir(e.kind(), e.to_string()))?;
+            let dir_entry = dir_entry.map_err(|e| EvaluateError::CouldntReadDir(e.kind(), dir.into(), e.to_string()))?;
             let path = dir.join(dir_entry.file_name());
             if is_dir(&path) {
                 Self::get_descendant_path_values(&path, result_path_values)?;
@@ -750,15 +759,27 @@ impl PathStepOperation {
                     regex_str.push_str("$");
                     let regex = Regex::new(&regex_str).unwrap();
                     if is_dir(&context_dir) {
-                        let dir_entries = read_dir(&context_dir).map_err(|e| EvaluateError::CouldntReadDir(e.kind(), e.to_string()))?;
-                        for dir_entry in dir_entries {
-                            let dir_entry = dir_entry.map_err(|e| EvaluateError::CouldntReadDir(e.kind(), e.to_string()))?;
-                            let filename = dir_entry.file_name().to_string_lossy().into_owned();
-                            if regex.is_match(&filename) {
-                                let path = PathBuf::from(filename);
-                                paths.push(path);
-                            }
-                        }
+                        match read_dir(&context_dir) {
+                            Err(e) => {
+                                if e.kind() != io::ErrorKind::PermissionDenied {
+                                    return Err(EvaluateError::CouldntReadDir(e.kind(), context_dir.into(), e.to_string()));
+                                }
+                                eprintln!("WARNING: {:?} in read_dir({})", e.kind(), context_dir.to_string_lossy());
+                            },
+                            Ok(dir_entries) => {
+                                for dir_entry in dir_entries {
+                                    let dir_entry = match dir_entry {
+                                        Err(e) => return Err(EvaluateError::CouldntReadDir(e.kind(), context_dir.into(), e.to_string())),
+                                        Ok(dir_entry) => dir_entry,
+                                    };
+                                    let filename = dir_entry.file_name().to_string_lossy().into_owned();
+                                    if regex.is_match(&filename) {
+                                        let path = PathBuf::from(filename);
+                                        paths.push(path);
+                                    }
+                                }
+                            },
+                        };
                     };
                 },
                 NotChecked => {
