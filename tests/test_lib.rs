@@ -55,7 +55,9 @@ fn test_query_general() {
         ("mime(test.mp4)", "'video/mp4'"),
         ("mime(data)", "'application/octet-stream'"),
         ("foo{bar,baz}aaa{bbb,ccc}ddd", "set(foobaraaabbbddd, foobaraaacccddd, foobazaaabbbddd, foobazaaacccddd)"),
-        ("/t{*}p", "/tmp"),
+        ("true()[true()]", "true()"),
+        ("foo/ bar", "foo/bar"),
+        ("foo{bar,baz}[name().ends_with('baz')]", "foobaz"),
     ];
 
     for (q, expected_q) in &q_map {

@@ -83,6 +83,17 @@ pub fn call_function(identifier: &str, ctx: &EvaluationContext, vs: &[Value]) ->
             let result: bool = target_str.starts_with(&prefix);
             Ok(Value::from(result))
         },
+        "ends_with" => {
+            let (value, vs) = fix_first_arg(ctx, vs, 2);
+            let suffix = if 0 == vs.len() {
+                "".to_string()
+            } else {
+                vs[0].clone().into()
+            };
+            let target_str: String = value.into();
+            let result: bool = target_str.ends_with(&suffix);
+            Ok(Value::from(result))
+        },
         "dir" => {
             let (value, _) = fix_first_arg(ctx, vs, 1);
             let path: PathBuf = value.into();

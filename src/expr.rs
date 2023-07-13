@@ -549,66 +549,9 @@ pub struct PathStep {
 
 impl PathStep {
     pub fn parse(i: &str) -> ParseResult<PathStep> {
-        let (i, _) = parse_space(i)?;
-
-        if let Ok((i, _)) = tag("**")(i).wrap_failure()? {
-            let op = PathStepOperation::Recursive;
-            let (i, predicate_exprs) = PathStep::parse_predicates(i)?;
-            return Ok((i, PathStep { op, predicate_exprs }));
-        };
-
-        let mut components: Vec<PathStepPatternComponent> = Vec::new();
-        let mut next_i = i;
-        loop {
-            let i = next_i;
-
-            if let Ok((i, _)) = tag("**")(i).wrap_failure()? {
-                return Err(Err::Error(ParseError::from_error_kind(i, ErrorKind::Tag)));
-            };
-
-            let Ok((i, component)) = Self::parse_component(i).wrap_failure()? else {
-                break
-            };
-
-            components.push(component);
-
-            next_i = i;
-        };
-        if components.len() == 0 {
-            return Err(Err::Error(ParseError::from_error_kind(i, ErrorKind::Char)));
-        };
-
-        let i = next_i;
-        let op = PathStepOperation::Pattern(components);
-        let (i, predicate_exprs) = PathStep::parse_predicates(i)?;
+        let (i, op) = preceded(parse_space, PathStepOperation::parse)(i)?;
+        let (i, predicate_exprs) = Self::parse_predicates(i)?;
         Ok((i, PathStep { op, predicate_exprs }))
-    }
-
-    fn parse_component(i: &str) -> ParseResult<PathStepPatternComponent> {
-        alt((
-                Self::parse_name_component,
-                Self::parse_match_all_component,
-                Self::parse_exprs_component,
-        ))(i)
-    }
-
-    fn parse_name_component(i: &str) -> ParseResult<PathStepPatternComponent> {
-        let (i, name) = recognize(many1_count(alt((alphanumeric1, tag("_"), tag("-"), tag(".")))))(i)?;
-        Ok((i, PathStepPatternComponent::Pattern(Pattern::Name(name.to_string()))))
-    }
-
-    fn parse_match_all_component(i: &str) -> ParseResult<PathStepPatternComponent> {
-        let (i, _) = tag("*")(i)?;
-        Ok((i, PathStepPatternComponent::Pattern(Pattern::Regex("(?:.*?)".to_string()))))
-    }
-
-    fn parse_exprs_component(i: &str) -> ParseResult<PathStepPatternComponent> {
-        let (i, exprs) = delimited(
-            preceded(parse_space, char('{')),
-            cut(separated_list0(preceded(parse_space, char(',')), FilterExpr::parse)),
-            cut(preceded(parse_space, char('}'))),
-        )(i)?;
-        Ok((i, PathStepPatternComponent::Exprs(exprs)))
     }
 
     fn parse_predicates(i: &str) -> ParseResult<Vec<FilterExpr>> {
@@ -665,13 +608,39 @@ pub enum PathStepOperation {
     Pattern(Vec<PathStepPatternComponent>),
 }
 
-#[derive(Debug, Hash, Eq, PartialEq)]
-pub enum PathStepPatternComponent {
-    Pattern(Pattern),
-    Exprs(Vec<FilterExpr>),
-}
-
 impl PathStepOperation {
+    pub fn parse(i: &str) -> ParseResult<Self> {
+        let (i, _) = parse_space(i)?;
+
+        if let Ok((i, _)) = tag("**")(i).wrap_failure()? {
+            return Ok((i, Self::Recursive));
+        };
+
+        let mut components: Vec<PathStepPatternComponent> = Vec::new();
+        let mut next_i = i;
+        loop {
+            let i = next_i;
+
+            if let Ok((i, _)) = tag("**")(i).wrap_failure()? {
+                return Err(Err::Error(ParseError::from_error_kind(i, ErrorKind::Tag)));
+            };
+
+            let Ok((i, component)) = PathStepPatternComponent::parse(i).wrap_failure()? else {
+                break
+            };
+
+            components.push(component);
+
+            next_i = i;
+        };
+        if components.len() == 0 {
+            return Err(Err::Error(ParseError::from_error_kind(i, ErrorKind::Char)));
+        };
+
+        let i = next_i;
+        Ok((i, Self::Pattern(components)))
+    }
+
     fn evaluate(&self, ctx: &EvaluationContext, value: &Value, in_pattern: bool) -> Result<Value, EvaluateError> {
         match self {
             Self::Recursive => {
@@ -720,34 +689,18 @@ impl PathStepOperation {
     }
 
     fn evaluate_pattern(components: &Vec<PathStepPatternComponent>, ctx: &EvaluationContext, values: &Value, in_pattern: bool) -> Result<Value, EvaluateError> {
-        use PathStepPatternComponent as Comp;
         use PathExistence::*;
 
         let mut path_existence = values.path_existence();
-
-        let mut result_values = HashSet::new();
-
         let mut context_value_patterns_pairs: Vec<(Value, Vec<Pattern>)> = Vec::new();
 
         for context_value in values {
             let mut cumulative_patterns = vec![Pattern::new_name("")];
             for comp in components {
-                match comp {
-                    Comp::Pattern(pattern) => {
-                        cumulative_patterns = cumulative_patterns.into_iter().map(|p| p + pattern).collect();
-                    },
-                    Comp::Exprs(exprs) => {
-                        let mut expr_patterns: Vec<Pattern> = Vec::new();
-                        for expr in exprs {
-                            let ctx = ctx.scope(&context_value, &[], true);
-                            let expr_result = expr.evaluate(&ctx)?;
-                            expr_patterns.push(expr_result.into());
-                        };
-                        cumulative_patterns = cumulative_patterns.iter().flat_map(|cumulative_pattern| {
-                            expr_patterns.iter().map(|expr_pattern| cumulative_pattern + expr_pattern).collect::<Vec<Pattern>>()
-                        }).collect();
-                    },
-                };
+                let comp_patterns = comp.evaluate(ctx, &context_value)?;
+                cumulative_patterns = cumulative_patterns.iter().flat_map(|cumulative_pattern| {
+                    comp_patterns.iter().map(|comp_pattern| cumulative_pattern + comp_pattern).collect::<Vec<Pattern>>()
+                }).collect();
             };
 
             let all_name_patterns = cumulative_patterns.iter().all(|p| {
@@ -771,6 +724,8 @@ impl PathStepOperation {
             let (_, patterns) = &context_value_patterns_pairs[0];
             return Ok(Value::from(Pattern::join(&patterns)));
         }
+
+        let mut result_values = HashSet::new();
 
         for (context_value, patterns) in context_value_patterns_pairs.into_iter() {
             let context_dir: PathBuf = context_value.into();
@@ -821,6 +776,58 @@ impl PathStepOperation {
         Ok(Value::Set(result_values, path_existence))
     }
 
+}
+
+#[derive(Debug, Hash, Eq, PartialEq)]
+pub enum PathStepPatternComponent {
+    Pattern(Pattern),
+    Exprs(Vec<FilterExpr>),
+}
+
+impl PathStepPatternComponent {
+    fn parse(i: &str) -> ParseResult<Self> {
+        alt((
+                Self::parse_name_component,
+                Self::parse_match_all_component,
+                Self::parse_exprs_component,
+        ))(i)
+    }
+
+    fn parse_name_component(i: &str) -> ParseResult<Self> {
+        let (i, name) = recognize(many1_count(alt((alphanumeric1, tag("_"), tag("-"), tag(".")))))(i)?;
+        Ok((i, Self::Pattern(Pattern::Name(name.to_string()))))
+    }
+
+    fn parse_match_all_component(i: &str) -> ParseResult<Self> {
+        let (i, _) = tag("*")(i)?;
+        Ok((i, Self::Pattern(Pattern::Regex("(?:.*?)".to_string()))))
+    }
+
+    fn parse_exprs_component(i: &str) -> ParseResult<Self> {
+        let (i, exprs) = delimited(
+            preceded(parse_space, char('{')),
+            cut(separated_list0(preceded(parse_space, char(',')), FilterExpr::parse)),
+            cut(preceded(parse_space, char('}'))),
+        )(i)?;
+        Ok((i, Self::Exprs(exprs)))
+    }
+
+    fn evaluate(&self, ctx: &EvaluationContext, context_value: &Value) -> Result<Vec<Pattern>, EvaluateError> {
+        match self {
+            Self::Pattern(pattern) => {
+                Ok(vec![pattern.clone()])
+            },
+            Self::Exprs(exprs) => {
+                let mut patterns: Vec<Pattern> = Vec::new();
+                for expr in exprs {
+                    let ctx = ctx.scope(context_value, &[], true);
+                    let expr_result = expr.evaluate(&ctx)?;
+                    patterns.push(expr_result.into());
+                };
+                Ok(patterns)
+            },
+        }
+    }
 }
 
 #[derive(Debug, Hash, Eq, PartialEq)]
