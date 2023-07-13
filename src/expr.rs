@@ -678,7 +678,7 @@ impl PathStepOperation {
         let dir_entries = match read_dir(dir) {
             Err(e) => {
                 if e.kind() == io::ErrorKind::PermissionDenied {
-                    eprintln!("WARNING: {:?} in read_dir({})", e.kind(), dir.to_string_lossy());
+                    eprintln!("WARNING: {:?} in read_dir({})", e.kind(), dir.display());
                     return Ok(());
                 }
                 return Err(EvaluateError::CouldntReadDir(e.kind(), dir.into(), e.to_string()));
@@ -764,7 +764,7 @@ impl PathStepOperation {
                                 if e.kind() != io::ErrorKind::PermissionDenied {
                                     return Err(EvaluateError::CouldntReadDir(e.kind(), context_dir.into(), e.to_string()));
                                 }
-                                eprintln!("WARNING: {:?} in read_dir({})", e.kind(), context_dir.to_string_lossy());
+                                eprintln!("WARNING: {:?} in read_dir({})", e.kind(), context_dir.display());
                             },
                             Ok(dir_entries) => {
                                 for dir_entry in dir_entries {

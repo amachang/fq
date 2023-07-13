@@ -1,5 +1,7 @@
 use fq::*;
 
+use std::path::PathBuf;
+
 use nom::{
     error::convert_error,
 };
@@ -43,16 +45,17 @@ fn main() {
     } else {
         evaluate_with_cache(&expr)
     };
-    let values = match result {
+    let result = match result {
         Err(e) => {
             println!("Excution Error: {:?}", e);
             return ();
         },
-        Ok(values) => values,
+        Ok(result) => result,
     };
-    for value in &values {
-        let line: String = value.into();
-        println!("{}", line);
+    let mut paths: Vec<PathBuf> = result.into_iter().map(|v| v.into()).collect();
+    paths.sort();
+    for path in &paths {
+        println!("{}", path.display());
     }
 }
 

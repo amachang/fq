@@ -50,7 +50,7 @@ pub fn query(i: &str) -> Result<Vec<PathBuf>, Error> {
         let path: PathBuf = value.into();
         paths.push(path);
     };
-
+    paths.sort();
     Ok(paths)
 }
 

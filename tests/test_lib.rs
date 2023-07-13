@@ -52,6 +52,8 @@ fn test_query_general() {
         ("path('') | dir()", "set(path(''))"),
         ("/", "set(path('/'))"),
         ("number(0) = 0", "true()"),
+        ("mime(test.mp4)", "'video/mp4'"),
+        ("mime(data)", "'application/octet-stream'"),
     ];
 
     for (q, expected_q) in &q_map {
