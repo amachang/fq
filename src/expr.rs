@@ -12,6 +12,7 @@ use super::{
     primitive::{
         PathExistence,
         Number,
+        Pattern,
     },
     function::{
         call_function,
@@ -42,7 +43,6 @@ use std::{
 };
 
 use regex;
-use regex::Regex;
 
 use nom::{
     bytes::complete::{
@@ -83,13 +83,15 @@ use dirs::home_dir;
 pub struct EvaluationContext {
     pub var_map: HashMap<String, Value>,
     pub context_value: Value,
+    pub in_pattern: bool,
 }
 
 impl EvaluationContext {
-    pub fn new(context_value: Value) -> EvaluationContext {
+    pub fn new(context_value: Value, in_pattern: bool) -> EvaluationContext {
         EvaluationContext {
             var_map: HashMap::new(),
-            context_value: context_value,
+            context_value,
+            in_pattern,
         }
     }
 
@@ -105,7 +107,7 @@ impl EvaluationContext {
         &self.context_value
     }
 
-    pub fn scope(&self, value: &Value, vars: &[(&str, &Value)]) -> Self {
+    pub fn scope(&self, value: &Value, vars: &[(&str, &Value)], in_pattern: bool) -> Self {
         let parent_dir: PathBuf = self.context_value.clone().into();
         let context_dir: PathBuf = value.into();
 
@@ -116,7 +118,11 @@ impl EvaluationContext {
 
         let context_value = Value::from(parent_dir.join(context_dir));
 
-        Self { var_map, context_value }
+        Self {
+            var_map,
+            context_value,
+            in_pattern,
+        }
     }
 
     fn exactly_eq_value(self_value: &Value, other_value: &Value) -> bool {
@@ -141,6 +147,7 @@ impl EvaluationContext {
         match value {
             Value::Boolean(b) => b.hash(state),
             Value::String(s) => s.hash(state),
+            Value::Pattern(p) => p.hash(state),
             Value::Set(s, e) => {
                 e.hash(state);
                 s.into_iter().collect::<Vec<_>>().sort().hash(state)
@@ -191,6 +198,17 @@ pub enum EvaluateError {
     VariableNotFound(String),
     CouldntReadDir(io::ErrorKind, PathBuf, String),
     CsvReadError(PathBuf, String),
+    RegexError(String),
+    LiteralRootPathNotAllowedInPathPattern,
+    RecursivePathStepNotAllowedInPathPattern,
+    PathStepNotAllowedInPathPattern,
+    PredicateNotAllowedInPathPattern,
+}
+
+impl From<regex::Error> for EvaluateError {
+    fn from(err: regex::Error) -> Self {
+        Self::RegexError(format!("{}", err))
+    }
 }
 
 pub type MemoizationCache<'a> = HashMap<MemoizationKey<'a>, Value>;
@@ -204,7 +222,6 @@ pub enum MemoizationKey<'a> {
     LiteralPathRootExpr(&'a LiteralPathRootExpr, &'a EvaluationContext),
     MemberCallExpr(&'a MemberCallExpr, &'a EvaluationContext),
     PrimaryExpr(&'a PrimaryExpr, &'a EvaluationContext),
-    PathStepExpr(&'a PathStepExpr, &'a EvaluationContext),
     VariableReferenceExpr(&'a VariableReferenceExpr, &'a EvaluationContext),
     FunctionCallExpr(&'a FunctionCallExpr, &'a EvaluationContext),
     LiteralStringExpr(&'a LiteralStringExpr, &'a EvaluationContext),
@@ -252,7 +269,7 @@ impl Expr for FilterExpr {
         for expr in expr_iter {
             let mut value_vec = Vec::new();
             for v in &value {
-                let ctx = ctx.scope(&v, &[("_", &v)]);
+                let ctx = ctx.scope(&v, &[("_", &v)], false);
                 let result_value = expr.evaluate(&ctx)?;
                 value_vec.push(result_value);
             }
@@ -310,8 +327,13 @@ impl PathExpr {
 impl Expr for PathExpr {
     fn evaluate(&self, ctx: &EvaluationContext) -> Result<Value, EvaluateError> {
         let mut value = self.root_expr.evaluate(ctx)?;
+        if self.steps.len() > 0 {
+            if ctx.in_pattern {
+                return Err(EvaluateError::PathStepNotAllowedInPathPattern)
+            }
+        }
         for step in &self.steps {
-            value = step.evaluate(&ctx, &value)?;
+            value = step.evaluate(&ctx, &value, false)?;
         };
         return Ok(value)
     }
@@ -370,8 +392,15 @@ impl Expr for PathRootExpr {
         use PathRootExpr::*;
         match self {
             MemberCallExpr(expr) => expr.evaluate(ctx),
-            LiteralPathRootExpr(expr) => expr.evaluate(ctx),
-            PathStep(step) => step.evaluate(ctx, &Value::from("")),
+            LiteralPathRootExpr(expr) => {
+                if ctx.in_pattern {
+                    return Err(EvaluateError::LiteralRootPathNotAllowedInPathPattern)
+                }
+                expr.evaluate(ctx)
+            },
+            PathStep(step) => {
+                step.evaluate(ctx, &Value::from(""), ctx.in_pattern)
+            },
         }
     }
 
@@ -513,21 +542,6 @@ impl Expr for PrimaryExpr {
 }
 
 #[derive(Debug, Hash, Eq, PartialEq)]
-pub struct PathStepExpr {
-    pub step: PathStep,
-}
-
-impl Expr for PathStepExpr {
-    fn evaluate(&self, ctx: &EvaluationContext) -> Result<Value, EvaluateError> {
-        self.step.evaluate(&ctx, &Value::from(""))
-    }
-
-    fn memoization_key<'a>(&'a self, ctx: &'a EvaluationContext) -> MemoizationKey {
-        MemoizationKey::PathStepExpr(self, ctx)
-    }
-}
-
-#[derive(Debug, Hash, Eq, PartialEq)]
 pub struct PathStep {
     pub op: PathStepOperation,
     pub predicate_exprs: Vec<FilterExpr>,
@@ -580,12 +594,12 @@ impl PathStep {
 
     fn parse_name_component(i: &str) -> ParseResult<PathStepPatternComponent> {
         let (i, name) = recognize(many1_count(alt((alphanumeric1, tag("_"), tag("-"), tag(".")))))(i)?;
-        Ok((i, PathStepPatternComponent::Name(name.to_string())))
+        Ok((i, PathStepPatternComponent::Pattern(Pattern::Name(name.to_string()))))
     }
 
     fn parse_match_all_component(i: &str) -> ParseResult<PathStepPatternComponent> {
         let (i, _) = tag("*")(i)?;
-        Ok((i, PathStepPatternComponent::Regex("(?:.*?)".to_string())))
+        Ok((i, PathStepPatternComponent::Pattern(Pattern::Regex("(?:.*?)".to_string()))))
     }
 
     fn parse_exprs_component(i: &str) -> ParseResult<PathStepPatternComponent> {
@@ -621,7 +635,7 @@ impl PathStep {
             let value = next_value;
             let mut values = Vec::new();
             for context_value in &value {
-                let ctx = &ctx.scope(&context_value, &[]);
+                let ctx = &ctx.scope(&context_value, &[], false);
                 let predicate_value = predicate_expr.evaluate(ctx)?;
                 let predicate_value: bool = predicate_value.into();
 
@@ -634,8 +648,13 @@ impl PathStep {
         Ok(next_value)
     }
 
-    fn evaluate(&self, ctx: &EvaluationContext, value: &Value) -> Result<Value, EvaluateError> {
-        let value = self.op.evaluate(ctx, value)?;
+    fn evaluate(&self, ctx: &EvaluationContext, value: &Value, in_pattern: bool) -> Result<Value, EvaluateError> {
+        let value = self.op.evaluate(ctx, value, in_pattern)?;
+        if self.predicate_exprs.len() > 0 {
+            if ctx.in_pattern {
+                return Err(EvaluateError::PredicateNotAllowedInPathPattern)
+            }
+        }
         Self::evaluate_predicates(ctx, &self.predicate_exprs, value)
     }
 }
@@ -648,16 +667,20 @@ pub enum PathStepOperation {
 
 #[derive(Debug, Hash, Eq, PartialEq)]
 pub enum PathStepPatternComponent {
-    Name(String),
-    Regex(String),
+    Pattern(Pattern),
     Exprs(Vec<FilterExpr>),
 }
 
 impl PathStepOperation {
-    fn evaluate(&self, ctx: &EvaluationContext, value: &Value) -> Result<Value, EvaluateError> {
+    fn evaluate(&self, ctx: &EvaluationContext, value: &Value, in_pattern: bool) -> Result<Value, EvaluateError> {
         match self {
-            Self::Recursive => Self::evaluate_recursive(value),
-            Self::Pattern(components) => Self::evaluate_pattern(components, ctx, value),
+            Self::Recursive => {
+                if in_pattern {
+                    return Err(EvaluateError::RecursivePathStepNotAllowedInPathPattern)
+                }
+                Self::evaluate_recursive(value)
+            },
+            Self::Pattern(components) => Self::evaluate_pattern(components, ctx, value, in_pattern),
         }
     }
 
@@ -696,68 +719,66 @@ impl PathStepOperation {
         Ok(())
     }
 
-    fn evaluate_pattern(components: &Vec<PathStepPatternComponent>, ctx: &EvaluationContext, values: &Value) -> Result<Value, EvaluateError> {
+    fn evaluate_pattern(components: &Vec<PathStepPatternComponent>, ctx: &EvaluationContext, values: &Value, in_pattern: bool) -> Result<Value, EvaluateError> {
         use PathStepPatternComponent as Comp;
         use PathExistence::*;
-        let path_existence = match values.path_existence() {
-            Checked => Checked,
-            NotChecked => components.iter().fold(NotChecked, |pe, comp| match (pe, comp) {
-                (Checked, _) => Checked,
-                (NotChecked, Comp::Name(_)) => NotChecked,
-                (NotChecked, Comp::Regex(_)) => Checked,
-                (NotChecked, Comp::Exprs(_)) => NotChecked,
-            }),
-        };
 
-        enum EvaluatedComp<'a> {
-            Name(&'a str),
-            Regex(&'a str),
-            Exprs(Vec<String>),
-        }
+        let mut path_existence = values.path_existence();
 
         let mut result_values = HashSet::new();
 
+        let mut context_value_patterns_pairs: Vec<(Value, Vec<Pattern>)> = Vec::new();
+
         for context_value in values {
-            let ctx = ctx.scope(&context_value, &[]);
-            let mut evaluated_comps = Vec::new();
+            let mut cumulative_patterns = vec![Pattern::new_name("")];
             for comp in components {
-                let evaluated_comp = match comp {
-                    Comp::Name(name) => EvaluatedComp::Name(name),
-                    Comp::Regex(regex) => EvaluatedComp::Regex(regex),
+                match comp {
+                    Comp::Pattern(pattern) => {
+                        cumulative_patterns = cumulative_patterns.into_iter().map(|p| p + pattern).collect();
+                    },
                     Comp::Exprs(exprs) => {
-                        let mut result_strs = Vec::new();
+                        let mut expr_patterns: Vec<Pattern> = Vec::new();
                         for expr in exprs {
-                            let results = expr.evaluate(&ctx)?;
-                            for result in &results {
-                                result_strs.push(result.into());
-                            }
+                            let ctx = ctx.scope(&context_value, &[], true);
+                            let expr_result = expr.evaluate(&ctx)?;
+                            expr_patterns.push(expr_result.into());
                         };
-                        EvaluatedComp::Exprs(result_strs)
+                        cumulative_patterns = cumulative_patterns.iter().flat_map(|cumulative_pattern| {
+                            expr_patterns.iter().map(|expr_pattern| cumulative_pattern + expr_pattern).collect::<Vec<Pattern>>()
+                        }).collect();
                     },
                 };
-                evaluated_comps.push(evaluated_comp)
             };
 
-            let context_dir: PathBuf = context_value.clone().into();
+            let all_name_patterns = cumulative_patterns.iter().all(|p| {
+                match p {
+                    Pattern::Name(_) => true,
+                    Pattern::Regex(_) => false,
+                }
+            });
+
+            path_existence = if path_existence == NotChecked && all_name_patterns {
+                NotChecked
+            } else {
+                Checked
+            };
+
+            context_value_patterns_pairs.push((context_value, cumulative_patterns));
+        }
+
+        if in_pattern {
+            assert_eq!(context_value_patterns_pairs.len(), 1);
+            let (_, patterns) = &context_value_patterns_pairs[0];
+            return Ok(Value::from(Pattern::join(&patterns)));
+        }
+
+        for (context_value, patterns) in context_value_patterns_pairs.into_iter() {
+            let context_dir: PathBuf = context_value.into();
             let mut paths = Vec::new();
+
             match path_existence {
                 Checked => {
-                    let mut regex_str = String::new();
-                    regex_str.push_str("^");
-                    for comp in evaluated_comps {
-                        let regex_comp_str = match comp {
-                            EvaluatedComp::Name(name) => regex::escape(name),
-                            EvaluatedComp::Regex(regex) => regex.to_string(),
-                            EvaluatedComp::Exprs(names) => {
-                                let name_regex_str: Vec<_> = names.iter().map(|n| regex::escape(n)).collect();
-                                name_regex_str.join("|")
-                            },
-                        };
-                        let regex_comp_str = format!("(?:{})", regex_comp_str);
-                        regex_str.push_str(&regex_comp_str);
-                    };
-                    regex_str.push_str("$");
-                    let regex = Regex::new(&regex_str).unwrap();
+                    let pattern = Pattern::join(&patterns);
                     if is_dir(&context_dir) {
                         match read_dir(&context_dir) {
                             Err(e) => {
@@ -773,7 +794,7 @@ impl PathStepOperation {
                                         Ok(dir_entry) => dir_entry,
                                     };
                                     let filename = dir_entry.file_name().to_string_lossy().into_owned();
-                                    if regex.is_match(&filename) {
+                                    if pattern.is_fullmatch(&filename)? {
                                         let path = PathBuf::from(filename);
                                         paths.push(path);
                                     }
@@ -783,30 +804,11 @@ impl PathStepOperation {
                     };
                 },
                 NotChecked => {
-                    let mut path_strs = vec!["".to_string()];
-                    for comp in evaluated_comps {
-                        match comp {
-                            EvaluatedComp::Name(name) => {
-                                for path_str in path_strs.iter_mut() {
-                                    *path_str = path_str.to_owned() + name;
-                                }
-                            },
-                            EvaluatedComp::Regex(_) => unreachable!(),
-                            EvaluatedComp::Exprs(names) => {
-                                let mut new_path_strs = Vec::new();
-                                for path_str in path_strs {
-                                    for name in &names {
-                                        let new_path_str = path_str.clone() + name;
-                                        new_path_strs.push(new_path_str);
-                                    }
-                                }
-                                path_strs = new_path_strs;
-                            },
+                    for pattern in patterns.into_iter() {
+                        let Pattern::Name(filename) = pattern else {
+                            unreachable!();
                         };
-                    };
-                    for path_str in &path_strs {
-                        let path = PathBuf::from(path_str);
-                        paths.push(path);
+                        paths.push(PathBuf::from(filename));
                     };
                 },
             };
@@ -818,6 +820,7 @@ impl PathStepOperation {
         };
         Ok(Value::Set(result_values, path_existence))
     }
+
 }
 
 #[derive(Debug, Hash, Eq, PartialEq)]

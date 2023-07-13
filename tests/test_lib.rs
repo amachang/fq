@@ -54,6 +54,8 @@ fn test_query_general() {
         ("number(0) = 0", "true()"),
         ("mime(test.mp4)", "'video/mp4'"),
         ("mime(data)", "'application/octet-stream'"),
+        ("foo{bar,baz}aaa{bbb,ccc}ddd", "set(foobaraaabbbddd, foobaraaacccddd, foobazaaabbbddd, foobazaaacccddd)"),
+        ("/t{*}p", "/tmp"),
     ];
 
     for (q, expected_q) in &q_map {

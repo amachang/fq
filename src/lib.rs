@@ -31,13 +31,13 @@ pub fn parse(i: &str) -> Result<FilterExpr, VerboseError<&str>> {
 }
 
 pub fn evaluate(expr: &FilterExpr) -> Result<Value, EvaluateError> {
-    let ctx = EvaluationContext::new(Value::from(PathBuf::from("")));
+    let ctx = EvaluationContext::new(Value::from(PathBuf::from("")), false);
     expr.evaluate(&ctx)
 }
 
 pub fn evaluate_with_cache(expr: &FilterExpr) -> Result<Value, EvaluateError> {
     let mut cache = MemoizationCache::new();
-    let ctx = EvaluationContext::new(Value::from(PathBuf::from("")));
+    let ctx = EvaluationContext::new(Value::from(PathBuf::from("")), false);
     expr.evaluate_then_cache(&ctx, &mut cache)
 }
 

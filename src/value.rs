@@ -3,6 +3,7 @@ use super::primitive::{
     RealNumber,
     RealNumberError,
     PathExistence,
+    Pattern,
 };
 
 use std::{
@@ -33,6 +34,7 @@ pub enum Value {
     Boolean(bool),
     String(String),
     Path(PathBuf),
+    Pattern(Pattern),
     Set(HashSet<RealValue>, PathExistence),
 }
 
@@ -64,6 +66,7 @@ pub enum RealValue {
     Boolean(bool),
     Path(PathBuf),
     String(String),
+    Pattern(Pattern),
 }
 
 pub enum RealValueError {
@@ -141,6 +144,7 @@ impl Value {
             Value::Number(_) => true,
             Value::Boolean(_) => true,
             Value::String(_) => false,
+            Value::Pattern(_) => false,
             Value::Path(path) => {
                 let string = convert_path_to_string(path);
                 match string.parse::<f64>() {
@@ -158,6 +162,7 @@ impl Value {
             Value::Boolean(_) => false,
             Value::String(_) => false,
             Value::Path(_) => false,
+            Value::Pattern(_) => false,
             Value::Set(_, _) => true,
         }
     }
@@ -181,6 +186,7 @@ impl Into<bool> for &Value {
             Value::Number(number) => convert_number_to_boolean(*number),
             Value::Boolean(boolean) => *boolean,
             Value::String(string) => 0 < string.len(),
+            Value::Pattern(pattern) => 0 < pattern.to_string().len(),
             Value::Path(path) => {
                 let string = convert_path_to_string(path);
                 let number = convert_string_to_number(&string);
@@ -209,6 +215,7 @@ impl Into<Number> for &Value {
             Value::Number(number) => *number,
             Value::Boolean(boolean) => if *boolean { Number::from(1) } else { Number::from(0) },
             Value::String(string) => convert_string_to_number(string),
+            Value::Pattern(pattern) => convert_string_to_number(pattern.into()),
             Value::Path(path) => {
                 let string = convert_path_to_string(path);
                 convert_string_to_number(&string)
@@ -282,6 +289,7 @@ impl Into<String> for &Value {
             Value::Number(number) => number.to_string(),
             Value::Boolean(boolean) => boolean.to_string(),
             Value::String(string) => string.clone(),
+            Value::Pattern(pattern) => pattern.to_string(),
             Value::Path(path) => path.to_string_lossy().into_owned(), // TODO String should be
                                                                       // contains OsString
             Value::Set(set, _) => convert_set_to_single_value(set).map_or(String::from(""), |v| v.into()),
@@ -331,9 +339,51 @@ impl Into<PathBuf> for &Value {
             Value::Number(number) => PathBuf::from(number.to_string()),
             Value::Boolean(boolean) => PathBuf::from(boolean.to_string()),
             Value::String(string) => PathBuf::from(string),
+            Value::Pattern(pattern) => {
+                match pattern {
+                    Pattern::Name(name) => PathBuf::from(name),
+                    Pattern::Regex(_) => PathBuf::from(""),
+                }
+            },
             Value::Path(path) => path.clone(),
             Value::Set(set, _) => convert_set_to_single_value(set).map_or(PathBuf::from(""), |v| v.into()),
         }
+    }
+}
+
+impl From<Pattern> for Value {
+    fn from(v: Pattern) -> Self {
+        Self::Pattern(v)
+    }
+}
+
+impl Into<Pattern> for Value {
+    fn into(self) -> Pattern {
+        match self {
+            Value::Number(number) => Pattern::Name(number.to_string()),
+            Value::Boolean(boolean) => Pattern::Name(boolean.to_string()),
+            Value::String(string) => Pattern::Name(string),
+            Value::Path(path) => Pattern::Name(convert_path_to_string(&path)),
+            Value::Pattern(pattern) => pattern,
+            Value::Set(set, _) => {
+                let patterns: Vec<Pattern> = set.into_iter().map(|real_value| {
+                    match real_value {
+                        RealValue::Pattern(pattern) => pattern,
+                        _ => {
+                            let value: Value = real_value.into();
+                            value.into()
+                        },
+                    }
+                }).collect();
+                Pattern::join(&patterns)
+            },
+        }
+    }
+}
+
+impl Into<Pattern> for &Value {
+    fn into(self) -> Pattern {
+        self.clone().into()
     }
 }
 
@@ -549,6 +599,7 @@ impl TryFrom<&Value> for RealValue {
             }
             Value::Boolean(boolean) => Ok(Self::Boolean(*boolean)),
             Value::String(string) => Ok(Self::String(string.clone())),
+            Value::Pattern(pattern) => Ok(Self::Pattern(pattern.clone())),
             Value::Path(path) => Ok(Self::Path(path.clone())),
             Value::Set(set, _) => {
                 match set.iter().cloned().next() {
@@ -562,21 +613,22 @@ impl TryFrom<&Value> for RealValue {
 
 impl Into<Value> for RealValue {
     fn into(self) -> Value {
-        (&self).into()
-    }
-}
-
-impl Into<Value> for &RealValue {
-    fn into(self) -> Value {
         match self {
             RealValue::Number(real_number) => {
                 let number: Number = real_number.into();
                 Value::from(number)
             }
-            RealValue::Path(path) => Value::from(path.clone()),
-            RealValue::Boolean(boolean) => Value::from(*boolean),
-            RealValue::String(string) => Value::from(string.clone()),
+            RealValue::Path(path) => Value::from(path),
+            RealValue::Boolean(boolean) => Value::from(boolean),
+            RealValue::String(string) => Value::from(string),
+            RealValue::Pattern(pattern) => Value::from(pattern),
         }
+    }
+}
+
+impl Into<Value> for &RealValue {
+    fn into(self) -> Value {
+        self.clone().into()
     }
 }
 

@@ -15,6 +15,11 @@ use std::{
     },
 };
 
+use regex::{
+    self,
+    Regex,
+};
+
 #[derive(Debug, Copy, Clone)]
 pub enum Number {
     Integer(i64),
@@ -266,5 +271,113 @@ impl ToString for RealNumber {
 pub enum PathExistence {
     Checked,
     NotChecked,
+}
+
+
+#[derive(Debug, Clone, Eq, PartialEq, Hash)]
+pub enum Pattern {
+    Name(String),
+    Regex(String),
+}
+
+impl Pattern {
+    pub fn new_regex(regex: &str) -> Pattern {
+        Self::Regex("(?:".to_string() + regex + ")")
+    }
+
+    pub fn new_name(name: &str) -> Pattern {
+        Self::Name(name.into())
+    }
+
+    pub fn is_fullmatch(&self, target: impl AsRef<str>) -> Result<bool, regex::Error> {
+        let target = target.as_ref();
+        match self {
+            Self::Name(name) => Ok(name == target),
+            Self::Regex(regex) => {
+                let regex = Regex::new(&("^".to_string() + regex + "$"))?;
+                Ok(regex.is_match(target))
+            },
+        }
+    }
+
+    pub fn join(patterns: &Vec<Pattern>) -> Self {
+        if patterns.len() == 0 {
+            return Self::new_name("")
+        }
+        if patterns.len() == 1 {
+            return patterns[0].clone()
+        }
+        let pattern_strs: Vec<String> = patterns.iter().map(|p| {
+            match p {
+                Self::Name(name) => to_regex_string(name),
+                Self::Regex(regex) => regex.clone(),
+            }
+        }).collect();
+        Self::new_regex(&pattern_strs.join("|"))
+    }
+}
+
+impl Add<&Pattern> for Pattern {
+    type Output = Pattern;
+    fn add(self, pattern: &Pattern) -> Self::Output {
+        match (self, pattern) {
+            (Self::Name(lhs), Self::Name(rhs)) => Self::Name(lhs + rhs),
+            (Self::Name(lhs), Self::Regex(rhs)) => Self::Regex(to_regex_string(&lhs) + rhs),
+            (Self::Regex(lhs), Self::Name(rhs)) => Self::Regex(lhs + &to_regex_string(rhs)),
+            (Self::Regex(lhs), Self::Regex(rhs)) => Self::Regex(lhs + rhs),
+        }
+    }
+}
+
+impl Add<Pattern> for Pattern {
+    type Output = Pattern;
+    fn add(self, pattern: Pattern) -> Self::Output {
+        self + &pattern
+    }
+}
+
+impl Add<&Pattern> for &Pattern {
+    type Output = Pattern;
+    fn add(self, pattern: &Pattern) -> Self::Output {
+        match (self, pattern) {
+            (Pattern::Name(lhs), Pattern::Regex(rhs)) => Pattern::Regex(to_regex_string(lhs) + rhs),
+            _ => self.clone() + pattern,
+        }
+    }
+}
+
+impl Add<Pattern> for &Pattern {
+    type Output = Pattern;
+    fn add(self, pattern: Pattern) -> Self::Output {
+        self + &pattern
+    }
+}
+
+impl ToString for Pattern {
+    fn to_string(&self) -> String {
+        self.clone().into()
+    }
+}
+
+impl From<Pattern> for String {
+    fn from(pattern: Pattern) -> String {
+        match pattern {
+            Pattern::Name(name) => name,
+            Pattern::Regex(regex) => regex,
+        }
+    }
+}
+
+impl<'a> From<&'a Pattern> for &'a String {
+    fn from(pattern: &'a Pattern) -> &'a String {
+        match pattern {
+            Pattern::Name(name) => name,
+            Pattern::Regex(regex) => regex,
+        }
+    }
+}
+
+fn to_regex_string(name_string: &String) -> String {
+    format!("(?:{})", regex::escape(name_string))
 }
 
