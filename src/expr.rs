@@ -354,7 +354,7 @@ impl PathRootStepExpr {
         let (i, expr) = alt((
                 |i| MemberCallExpr::parse(i).map(|(i, expr)| (i, PathRootExpr::MemberCallExpr(expr))),
                 |i| LiteralPathRootExpr::parse(i).map(|(i, expr)| (i, PathRootExpr::LiteralPathRootExpr(expr))),
-                |i| PathStep::parse(i).map(|(i, step)| (i, PathRootExpr::PathStep(step))),
+                |i| PathStepOperation::parse(i).map(|(i, op)| (i, PathRootExpr::PathStepOperation(op))),
         ))(i)?;
 
         let (i, predicate_exprs) = PathStep::parse_predicates(i)?;
@@ -384,7 +384,7 @@ impl Expr for PathRootStepExpr {
 pub enum PathRootExpr {
     MemberCallExpr(MemberCallExpr),
     LiteralPathRootExpr(LiteralPathRootExpr),
-    PathStep(PathStep),
+    PathStepOperation(PathStepOperation),
 }
 
 impl Expr for PathRootExpr {
@@ -398,8 +398,8 @@ impl Expr for PathRootExpr {
                 }
                 expr.evaluate(ctx)
             },
-            PathStep(step) => {
-                step.evaluate(ctx, &Value::from(""), ctx.in_pattern)
+            PathStepOperation(op) => {
+                op.evaluate_as_root(ctx, ctx.in_pattern)
             },
         }
     }
@@ -651,6 +651,23 @@ impl PathStepOperation {
             },
             Self::Pattern(components) => Self::evaluate_pattern(components, ctx, value, in_pattern),
         }
+    }
+
+    fn evaluate_as_root(&self, ctx: &EvaluationContext, in_pattern: bool) -> Result<Value, EvaluateError> {
+        if let Self::Pattern(components) = self {
+            if let Some(PathStepPatternComponent::Exprs(exprs)) = components.get(0) {
+                if components.len() == 1 {
+                    // if the root's only component is expressions, it behaves as set(expr, ...)
+                    let mut results = Vec::new();
+                    for expr in exprs.iter() {
+                        results.push(expr.evaluate(ctx)?);
+                    }
+                    return Ok(Value::from(results));
+                }
+            };
+        }
+
+        self.evaluate(ctx, &Value::from(""), in_pattern)
     }
 
     fn evaluate_recursive(values: &Value) -> Result<Value, EvaluateError> {
