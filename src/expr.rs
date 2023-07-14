@@ -13,6 +13,8 @@ use super::{
         PathExistence,
         Number,
         Pattern,
+        PathInfo,
+        PathInfoError,
     },
     function::{
         call_function,
@@ -28,13 +30,7 @@ use std::{
     collections::{
         HashSet,
     },
-    io,
-    fs,
     path,
-    path::{
-        Path,
-        PathBuf,
-    },
     hash::{
         Hash,
         Hasher,
@@ -77,8 +73,6 @@ use nom::{
     },
 };
 
-use dirs::home_dir;
-
 #[derive(Debug)]
 pub struct EvaluationContext {
     pub var_map: HashMap<String, Value>,
@@ -108,15 +102,15 @@ impl EvaluationContext {
     }
 
     pub fn scope(&self, value: &Value, vars: &[(&str, &Value)], in_pattern: bool) -> Self {
-        let parent_dir: PathBuf = self.context_value.clone().into();
-        let context_dir: PathBuf = value.into();
+        let parent_dir: PathInfo = self.context_value.clone().into();
+        let context_dir: PathInfo = value.into();
 
         let mut var_map = self.var_map.clone();
         for (name, value) in vars {
             var_map.insert(name.to_string(), value.clone().clone());
         }
 
-        let context_value = Value::from(parent_dir.join(context_dir));
+        let context_value = Value::from(parent_dir.join_not_checked(context_dir));
 
         Self {
             var_map,
@@ -196,9 +190,9 @@ impl Hash for EvaluationContext {
 pub enum EvaluateError {
     FunctionNotFound(String),
     VariableNotFound(String),
-    CouldntReadDir(io::ErrorKind, PathBuf, String),
-    CsvReadError(PathBuf, String),
+    CsvReadError(PathInfo, String),
     RegexError(String),
+    PathInfoError(PathInfoError),
     LiteralRootPathNotAllowedInPathPattern,
     RecursivePathStepNotAllowedInPathPattern,
     PathStepNotAllowedInPathPattern,
@@ -208,6 +202,12 @@ pub enum EvaluateError {
 impl From<regex::Error> for EvaluateError {
     fn from(err: regex::Error) -> Self {
         Self::RegexError(format!("{}", err))
+    }
+}
+
+impl From<PathInfoError> for EvaluateError {
+    fn from(err: PathInfoError) -> Self {
+        Self::PathInfoError(err)
     }
 }
 
@@ -411,7 +411,7 @@ impl Expr for PathRootExpr {
 
 #[derive(Debug, Hash, Eq, PartialEq)]
 pub struct LiteralPathRootExpr {
-    pub path: PathBuf
+    pub path: PathInfo
 }
 
 impl LiteralPathRootExpr {
@@ -427,12 +427,12 @@ impl LiteralPathRootExpr {
 
     pub fn parse(i: &str) -> ParseResult<Self> {
         let (i, _) = preceded(parse_space, tag("~"))(i)?;
-        Ok((i, LiteralPathRootExpr { path: home_dir().unwrap_or(PathBuf::from("/")) }))
+        Ok((i, LiteralPathRootExpr { path: PathInfo::home_dir().unwrap_or(PathInfo::from("/")) }))
     }
 
     pub fn parse_for_unix(i: &str) -> ParseResult<Self> {
         let (i, path) = preceded(parse_space, tag("/"))(i)?;
-        Ok((i, LiteralPathRootExpr { path: PathBuf::from(path) }))
+        Ok((i, LiteralPathRootExpr { path: PathInfo::from(path) }))
     }
 
     pub fn parse_for_windows(i: &str) -> ParseResult<Self> {
@@ -446,7 +446,7 @@ impl LiteralPathRootExpr {
                 ))
             )
         )(i)?;
-        Ok((i, LiteralPathRootExpr { path: PathBuf::from(path) }))
+        Ok((i, LiteralPathRootExpr { path: PathInfo::from(path) }))
     }
 
     fn parse_windows_drive_root(i: &str) -> ParseResult<&str> {
@@ -673,8 +673,8 @@ impl PathStepOperation {
     fn evaluate_recursive(values: &Value) -> Result<Value, EvaluateError> {
         let mut result_path_values = HashSet::new();
         for value in values {
-            let path: PathBuf = value.into();
-            if is_dir(&path) {
+            let path: PathInfo = value.into();
+            if path.is_dir() {
                 Self::get_descendant_path_values(&path, &mut result_path_values)?;
             }
             result_path_values.insert(RealValue::Path(path));
@@ -682,22 +682,10 @@ impl PathStepOperation {
         Ok(Value::Set(result_path_values, PathExistence::Checked))
     }
 
-    fn get_descendant_path_values(dir: impl AsRef<Path>, result_path_values: &mut HashSet<RealValue>) -> Result<(), EvaluateError> {
-        let dir = dir.as_ref();
-        let dir_entries = match read_dir(dir) {
-            Err(e) => {
-                if e.kind() == io::ErrorKind::PermissionDenied {
-                    eprintln!("WARNING: {:?} in read_dir({})", e.kind(), dir.display());
-                    return Ok(());
-                }
-                return Err(EvaluateError::CouldntReadDir(e.kind(), dir.into(), e.to_string()));
-            },
-            Ok(dir_entries) => dir_entries,
-        };
-        for dir_entry in dir_entries {
-            let dir_entry = dir_entry.map_err(|e| EvaluateError::CouldntReadDir(e.kind(), dir.into(), e.to_string()))?;
-            let path = dir.join(dir_entry.file_name());
-            if is_dir(&path) {
+    fn get_descendant_path_values(dir: &PathInfo, result_path_values: &mut HashSet<RealValue>) -> Result<(), EvaluateError> {
+        for path in dir.child_files()? {
+            let path = path?;
+            if path.is_dir_no_syscall().expect("No need syscall for checking dir path made from DirEntry") {
                 Self::get_descendant_path_values(&path, result_path_values)?;
             }
             result_path_values.insert(RealValue::Path(path));
@@ -745,34 +733,21 @@ impl PathStepOperation {
         let mut result_values = HashSet::new();
 
         for (context_value, patterns) in context_value_patterns_pairs.into_iter() {
-            let context_dir: PathBuf = context_value.into();
+            let context_dir: PathInfo = context_value.into();
             let mut paths = Vec::new();
 
             match path_existence {
                 Checked => {
                     let pattern = Pattern::join(&patterns);
-                    if is_dir(&context_dir) {
-                        match read_dir(&context_dir) {
-                            Err(e) => {
-                                if e.kind() != io::ErrorKind::PermissionDenied {
-                                    return Err(EvaluateError::CouldntReadDir(e.kind(), context_dir.into(), e.to_string()));
+                    if context_dir.is_dir() {
+                        for path in context_dir.child_files()? {
+                            let path = path?;
+                            if let Some(filename) = path.file_name() {
+                                if pattern.is_fullmatch(&filename)? {
+                                    paths.push(path);
                                 }
-                                eprintln!("WARNING: {:?} in read_dir({})", e.kind(), context_dir.display());
-                            },
-                            Ok(dir_entries) => {
-                                for dir_entry in dir_entries {
-                                    let dir_entry = match dir_entry {
-                                        Err(e) => return Err(EvaluateError::CouldntReadDir(e.kind(), context_dir.into(), e.to_string())),
-                                        Ok(dir_entry) => dir_entry,
-                                    };
-                                    let filename = dir_entry.file_name().to_string_lossy().into_owned();
-                                    if pattern.is_fullmatch(&filename)? {
-                                        let path = PathBuf::from(filename);
-                                        paths.push(path);
-                                    }
-                                }
-                            },
-                        };
+                            }
+                        }
                     };
                 },
                 NotChecked => {
@@ -780,13 +755,12 @@ impl PathStepOperation {
                         let Pattern::Name(filename) = pattern else {
                             unreachable!();
                         };
-                        paths.push(PathBuf::from(filename));
+                        paths.push(context_dir.join_not_checked(PathInfo::from(filename)));
                     };
                 },
             };
 
             for path in paths {
-                let path = context_dir.join(path);
                 result_values.insert(RealValue::Path(path));
             }
         };
@@ -1125,25 +1099,5 @@ impl BinaryOperator {
             Self::Or => Value::from(lv.into() || rv.into()),
         }
     }
-}
-
-fn ensure_not_empty_path(path: &Path) -> &Path {
-    if path == Path::new("") {
-        Path::new(".")
-    } else {
-        path
-    }
-}
-
-fn is_dir(path: impl AsRef<Path>) -> bool {
-    let path = path.as_ref();
-    let path = ensure_not_empty_path(path);
-    path.is_dir()
-}
-
-fn read_dir(path: impl AsRef<Path>) -> io::Result<fs::ReadDir> {
-    let path = path.as_ref();
-    let path = ensure_not_empty_path(path);
-    fs::read_dir(path)
 }
 

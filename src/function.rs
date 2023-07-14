@@ -9,6 +9,7 @@ use super::{
     },
     primitive::{
         PathExistence,
+        PathInfo,
     },
 };
 
@@ -16,9 +17,6 @@ use std::{
     io,
     collections::{
         HashSet,
-    },
-    path::{
-        PathBuf,
     },
 };
 
@@ -60,10 +58,9 @@ pub fn call_function(identifier: &str, ctx: &EvaluationContext, vs: &[Value]) ->
         },
         "name" => {
             let (value, _) = fix_first_arg(ctx, vs, 1);
-            let path: PathBuf = value.into();
+            let path: PathInfo = value.into();
             Ok(match path.file_name() {
-                Some(os_name) => Value::from(os_name.to_string_lossy().into_owned()), // TODO String should be
-                                                                                      // contains OsString
+                Some(os_name) => Value::from(os_name),
                 None => Value::from(""),
             })
         },
@@ -96,13 +93,12 @@ pub fn call_function(identifier: &str, ctx: &EvaluationContext, vs: &[Value]) ->
         },
         "dir" => {
             let (value, _) = fix_first_arg(ctx, vs, 1);
-            let path: PathBuf = value.into();
+            let path: PathInfo = value.into();
             Ok(match path.parent() {
                 Some(dir) => {
-                    let dir: PathBuf = dir.into();
                     Value::from(dir)
                 },
-                None => Value::from(PathBuf::from("")),
+                None => Value::from(PathInfo::from("")),
             })
         },
         "select" => {
@@ -132,8 +128,8 @@ pub fn call_function(identifier: &str, ctx: &EvaluationContext, vs: &[Value]) ->
                     ColumnSelectorOrHeaderName::HeaderName(selector_value.into())
                 }
             };
-            let path: PathBuf = value.into();
-            let mut reader = match csv::ReaderBuilder::new().delimiter(b',').has_headers(false).from_path(&path) {
+            let path: PathInfo = value.into();
+            let mut reader = match csv::ReaderBuilder::new().delimiter(b',').has_headers(false).from_path(path.path()) {
                 Err(err) => {
                     match err.kind() {
                         csv::ErrorKind::Io(io_err) => {
@@ -189,8 +185,8 @@ pub fn call_function(identifier: &str, ctx: &EvaluationContext, vs: &[Value]) ->
         },
         "mime" => {
             let (value, _) = fix_first_arg(ctx, vs, 1);
-            let path: PathBuf = value.into();
-            let mime = mime_guess::from_path(&path);
+            let path: PathInfo = value.into();
+            let mime = mime_guess::from_path(path.path());
             return Ok(Value::from(mime.first_or_octet_stream().essence_str()))
         },
         _ => Err(EvaluateError::FunctionNotFound(identifier.to_string())),

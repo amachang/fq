@@ -2,7 +2,6 @@ use fq::*;
 
 use std::{
     path,
-    path::PathBuf,
 };
 
 use nom::error::{
@@ -137,7 +136,7 @@ fn just_for_coverage() {
         preceded(parse_space, tag(path::MAIN_SEPARATOR_STR)),
         |i| {
             let (i, path) = preceded(char('<'), cut(terminated(tag("root"), char('>'))))(i)?;
-            let expr = LiteralPathRootExpr { path: PathBuf::from(path) };
+            let expr = LiteralPathRootExpr { path: PathInfo::from(path) };
             let expr = PathRootExpr::LiteralPathRootExpr(expr);
             let expr = PathRootStepExpr { expr, predicate_exprs: vec![] };
             Ok((i, expr))

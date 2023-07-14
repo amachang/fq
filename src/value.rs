@@ -3,6 +3,7 @@ use super::primitive::{
     RealNumber,
     RealNumberError,
     PathExistence,
+    PathInfo,
     Pattern,
 };
 
@@ -24,8 +25,8 @@ use std::{
         Rem,
         Mul,
     },
-    path::PathBuf,
     borrow::Cow,
+    path::PathBuf,
 };
 
 #[derive(Debug, Clone)]
@@ -33,7 +34,7 @@ pub enum Value {
     Number(Number),
     Boolean(bool),
     String(String),
-    Path(PathBuf),
+    Path(PathInfo),
     Pattern(Pattern),
     Set(HashSet<RealValue>, PathExistence),
 }
@@ -64,7 +65,7 @@ impl PartialEq for Value {
 pub enum RealValue {
     Number(RealNumber),
     Boolean(bool),
-    Path(PathBuf),
+    Path(PathInfo),
     String(String),
     Pattern(Pattern),
 }
@@ -119,7 +120,7 @@ impl Value {
         match self {
             Value::Path(_) => Cow::Borrowed(self),
             _ => {
-                let v: PathBuf = self.into();
+                let v: PathInfo = self.into();
                 Cow::Owned(Value::from(v))
             },
         }
@@ -290,15 +291,14 @@ impl Into<String> for &Value {
             Value::Boolean(boolean) => boolean.to_string(),
             Value::String(string) => string.clone(),
             Value::Pattern(pattern) => pattern.to_string(),
-            Value::Path(path) => path.to_string_lossy().into_owned(), // TODO String should be
-                                                                      // contains OsString
+            Value::Path(path) => path.to_string(),
             Value::Set(set, _) => convert_set_to_single_value(set).map_or(String::from(""), |v| v.into()),
         }
     }
 }
 
-impl From<PathBuf> for Value {
-    fn from(path: PathBuf) -> Self {
+impl From<PathInfo> for Value {
+    fn from(path: PathInfo) -> Self {
         Self::Path(path)
     }
 }
@@ -327,27 +327,40 @@ impl From<Vec<Value>> for Value {
     }
 }
 
-impl Into<PathBuf> for Value {
-    fn into(self) -> PathBuf {
-        (&self).into()
+impl From<Value> for PathInfo {
+    fn from(v: Value) -> Self {
+        (&v).into()
     }
 }
 
-impl Into<PathBuf> for &Value {
-    fn into(self) -> PathBuf {
-        match self {
-            Value::Number(number) => PathBuf::from(number.to_string()),
-            Value::Boolean(boolean) => PathBuf::from(boolean.to_string()),
-            Value::String(string) => PathBuf::from(string),
+impl From<&Value> for PathInfo {
+    fn from(v: &Value) -> PathInfo {
+        match v {
+            Value::Number(number) => Self::from(number.to_string()),
+            Value::Boolean(boolean) => Self::from(boolean.to_string()),
+            Value::String(string) => Self::from(string),
             Value::Pattern(pattern) => {
                 match pattern {
-                    Pattern::Name(name) => PathBuf::from(name),
-                    Pattern::Regex(_) => PathBuf::from(""),
+                    Pattern::Name(name) => Self::from(name),
+                    Pattern::Regex(_) => Self::from(""),
                 }
             },
             Value::Path(path) => path.clone(),
-            Value::Set(set, _) => convert_set_to_single_value(set).map_or(PathBuf::from(""), |v| v.into()),
+            Value::Set(set, _) => convert_set_to_single_value(set).map_or(Self::from(""), |v| v.into()),
         }
+    }
+}
+
+impl From<Value> for PathBuf {
+    fn from(v: Value) -> Self {
+        (&v).into()
+    }
+}
+
+impl From<&Value> for PathBuf {
+    fn from(v: &Value) -> PathBuf {
+        let path: PathInfo = v.into();
+        path.into()
     }
 }
 
@@ -450,8 +463,8 @@ impl<const N: usize> From<[&str; N]> for Value {
     }
 }
 
-impl<const N: usize> From<[PathBuf; N]> for Value {
-    fn from(ps: [PathBuf; N]) -> Self {
+impl<const N: usize> From<[PathInfo; N]> for Value {
+    fn from(ps: [PathInfo; N]) -> Self {
         let mut values = HashSet::new();
         for p in ps {
             values.insert(RealValue::Path(p));
@@ -517,8 +530,8 @@ fn convert_set_to_single_value(set: &HashSet<RealValue>) -> Option<Value> {
     Some(set.iter().cloned().next()?.into())
 }
 
-fn convert_path_to_string(path: &PathBuf) -> String {
-    path.to_string_lossy().into_owned()
+fn convert_path_to_string(path: &PathInfo) -> String {
+    path.to_string()
 }
 
 fn convert_string_to_number(string: &String) -> Number {

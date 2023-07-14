@@ -13,12 +13,23 @@ use std::{
         Rem,
         Mul,
     },
+    path::{
+        Path,
+        PathBuf,
+    },
+    fs::{
+        self,
+        ReadDir,
+        DirEntry
+    },
 };
 
 use regex::{
     self,
     Regex,
 };
+
+use dirs::home_dir;
 
 #[derive(Debug, Copy, Clone)]
 pub enum Number {
@@ -379,5 +390,175 @@ impl<'a> From<&'a Pattern> for &'a String {
 
 fn to_regex_string(name_string: &String) -> String {
     format!("(?:{})", regex::escape(name_string))
+}
+
+#[derive(Debug, Clone, Eq, PartialEq, Hash)]
+pub enum FileType {
+    Dir,
+    File,
+}
+
+#[derive(Debug, Clone, Eq, PartialEq, Hash)]
+pub enum PathInfo {
+    Checked(PathBuf, FileType),
+    NotChecked(PathBuf),
+}
+
+#[derive(Debug, Clone, Eq, PartialEq, Hash)]
+pub enum PathInfoError {
+    PathExistenceNotYetChecked,
+    FromDirEntryError(String),
+    CouldntReadDir(String),
+}
+
+impl PathInfo {
+    pub fn path(&self) -> &Path {
+        match self {
+            Self::Checked(path, _) => &path,
+            Self::NotChecked(path) => &path,
+        }
+    }
+
+    pub fn file_name(&self) -> Option<String> {
+        self.path().file_name().map(|n| n.to_string_lossy().into_owned())
+    }
+
+    pub fn parent(&self) -> Option<Self> {
+        match self {
+            Self::Checked(path, _) => {
+                Self::parent_path(path).map(|parent_path| {
+                    Self::Checked(parent_path.into(), FileType::Dir)
+                })
+            },
+            Self::NotChecked(path) => {
+                Self::parent_path(path).map(|parent_path| {
+                    Self::NotChecked(parent_path.into())
+                })
+            },
+        }
+    }
+
+    pub fn join_not_checked(&self, path: Self) -> Self {
+        let path: PathBuf = path.into();
+        Self::NotChecked(self.path().join(path))
+    }
+
+    pub fn home_dir() -> Option<Self> {
+        if let Some(home_dir) = home_dir() {
+            if Self::is_dir_path(&home_dir) {
+                return Some(Self::Checked(home_dir, FileType::Dir))
+            };
+        };
+        None
+    }
+
+    pub fn is_dir(&self) -> bool {
+        match self {
+            Self::Checked(_, FileType::Dir) => true,
+            Self::Checked(_, FileType::File) => false,
+            Self::NotChecked(path) => Self::is_dir_path(path),
+        }
+    }
+
+    pub fn is_dir_no_syscall(&self) -> Result<bool, PathInfoError> {
+        match self {
+            Self::Checked(_, FileType::Dir) => Ok(true),
+            Self::Checked(_, FileType::File) => Ok(false),
+            Self::NotChecked(_) => return Err(PathInfoError::PathExistenceNotYetChecked),
+        }
+    }
+
+    pub fn child_files(&self) -> Result<ChildFiles, PathInfoError> {
+        let mut path = self.path();
+        if path == Path::new("") {
+            path = Path::new(".");
+        }
+        let read_dir = match fs::read_dir(path) {
+            Ok(read_dir) => read_dir,
+            Err(err) => return Err(PathInfoError::CouldntReadDir(format!("{}: {:?}", path.display(), err))),
+        };
+        Ok(ChildFiles { dir: path, read_dir })
+    }
+
+    fn try_from_dir_entry(entry: DirEntry, parent: &Path) -> Result<Self, PathInfoError> {
+        let mut parent_path = parent;
+        if parent_path == Path::new(".") {
+            parent_path = Path::new("");
+        }
+        let file_type = match entry.file_type() {
+            Err(err) => return Err(PathInfoError::FromDirEntryError(format!("{:?}: {:?}", entry, err))),
+            Ok(file_type) => file_type,
+        };
+        let file_type = if file_type.is_dir() {
+            FileType::Dir
+        } else {
+            FileType::File
+        };
+        Ok(Self::Checked(parent_path.join(entry.file_name()), file_type))
+    }
+
+    fn parent_path<'a>(path: impl AsRef<Path> + 'a) -> Option<PathBuf> {
+        let path = path.as_ref();
+        if path == Path::new("") {
+            None
+        } else {
+            match path.parent() {
+                None => Some(PathBuf::from("")),
+                Some(path) => Some(path.into()),
+            }
+        }
+    }
+
+    fn is_dir_path(path: impl AsRef<Path>) -> bool {
+        let mut path = path.as_ref();
+        if path == Path::new("") {
+            path = Path::new(".");
+        }
+        path.is_dir()
+    }
+}
+
+impl ToString for PathInfo {
+    fn to_string(&self) -> String {
+        self.path().to_string_lossy().into_owned() // TODO String should be
+                                                 // contains OsString
+    }
+}
+
+impl<S> From<S> for PathInfo
+where
+    S: AsRef<Path>
+{
+    fn from(s: S) -> Self {
+        Self::NotChecked(PathBuf::from(s.as_ref()))
+    }
+}
+
+impl From<PathInfo> for PathBuf {
+    fn from(path: PathInfo) -> PathBuf {
+        match path {
+            PathInfo::Checked(path, _) => path,
+            PathInfo::NotChecked(path) => path,
+        }
+    }
+}
+
+pub struct ChildFiles<'a> {
+    dir: &'a Path,
+    read_dir: ReadDir,
+}
+
+impl<'a> Iterator for ChildFiles<'a> {
+    type Item = Result<PathInfo, PathInfoError>;
+
+    fn next(&mut self) -> Option<Self::Item> {
+        let Some(dir_entry) = self.read_dir.next() else {
+            return None;
+        };
+        Some(match dir_entry {
+            Ok(dir_entry) => PathInfo::try_from_dir_entry(dir_entry, self.dir),
+            Err(err) => Err(PathInfoError::CouldntReadDir(format!("{}: {:?}", self.dir.display(), err))),
+        })
+    }
 }
 

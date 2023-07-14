@@ -31,13 +31,13 @@ pub fn parse(i: &str) -> Result<FilterExpr, VerboseError<&str>> {
 }
 
 pub fn evaluate(expr: &FilterExpr) -> Result<Value, EvaluateError> {
-    let ctx = EvaluationContext::new(Value::from(PathBuf::from("")), false);
+    let ctx = EvaluationContext::new(Value::from(PathInfo::from("")), false);
     expr.evaluate(&ctx)
 }
 
 pub fn evaluate_with_cache(expr: &FilterExpr) -> Result<Value, EvaluateError> {
     let mut cache = MemoizationCache::new();
-    let ctx = EvaluationContext::new(Value::from(PathBuf::from("")), false);
+    let ctx = EvaluationContext::new(Value::from(PathInfo::from("")), false);
     expr.evaluate_then_cache(&ctx, &mut cache)
 }
 
@@ -47,8 +47,8 @@ pub fn query(i: &str) -> Result<Vec<PathBuf>, Error> {
 
     let mut paths = Vec::new();
     for value in &values {
-        let path: PathBuf = value.into();
-        paths.push(path);
+        let path: PathInfo = value.into();
+        paths.push(path.into());
     };
     paths.sort();
     Ok(paths)
