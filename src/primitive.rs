@@ -22,6 +22,7 @@ use std::{
         ReadDir,
         DirEntry
     },
+    io,
 };
 
 use regex::{
@@ -473,11 +474,17 @@ impl PathInfo {
         if path == Path::new("") {
             path = Path::new(".");
         }
-        let read_dir = match fs::read_dir(path) {
-            Ok(read_dir) => read_dir,
-            Err(err) => return Err(PathInfoError::CouldntReadDir(format!("{}: {:?}", path.display(), err))),
-        };
-        Ok(ChildFiles { dir: path, read_dir })
+        match fs::read_dir(path) {
+            Ok(read_dir) => Ok(ChildFiles { dir: path, read_dir: Some(read_dir) }),
+            Err(err) => {
+                if err.kind() == io::ErrorKind::PermissionDenied {
+                    // ignore permission dinied
+                    Ok(ChildFiles { dir: path, read_dir: None })
+                } else {
+                    Err(PathInfoError::CouldntReadDir(format!("{}: {:?}", path.display(), err)))
+                }
+            },
+        }
     }
 
     fn try_from_dir_entry(entry: DirEntry, parent: &Path) -> Result<Self, PathInfoError> {
@@ -545,20 +552,30 @@ impl From<PathInfo> for PathBuf {
 
 pub struct ChildFiles<'a> {
     dir: &'a Path,
-    read_dir: ReadDir,
+    read_dir: Option<ReadDir>,
 }
 
 impl<'a> Iterator for ChildFiles<'a> {
     type Item = Result<PathInfo, PathInfoError>;
 
     fn next(&mut self) -> Option<Self::Item> {
-        let Some(dir_entry) = self.read_dir.next() else {
+        let Some(ref mut read_dir) = self.read_dir else {
             return None;
         };
-        Some(match dir_entry {
-            Ok(dir_entry) => PathInfo::try_from_dir_entry(dir_entry, self.dir),
-            Err(err) => Err(PathInfoError::CouldntReadDir(format!("{}: {:?}", self.dir.display(), err))),
-        })
+        let Some(dir_entry) = read_dir.next() else {
+            return None;
+        };
+        match dir_entry {
+            Ok(dir_entry) => Some(PathInfo::try_from_dir_entry(dir_entry, self.dir)),
+            Err(err) => {
+                if err.kind() == io::ErrorKind::PermissionDenied {
+                    // ignore permission denied
+                    self.next()
+                } else {
+                    Some(Err(PathInfoError::CouldntReadDir(format!("{}: {:?}", self.dir.display(), err))))
+                }
+            },
+        }
     }
 }
 
